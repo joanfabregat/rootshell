@@ -69,8 +69,14 @@ jobs:
             platform: visionos-device
             actions: build
             extra: -configuration ReleaseAppStore
+          - name: App Store Release (iOS device, Xcode 26.5)
+            scheme: rootshell-AppStore
+            platform: ios-device
+            actions: build
+            extra: -configuration ReleaseAppStore
+            xcode: '26.5'
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode || '26.6' }}.app/Contents/Developer
       PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
