@@ -38,6 +38,8 @@ class SwiftUIBannerHostView<Content: View>: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    nonisolated deinit {}
+
     // MARK: - Parent
 
     /// Sets (or re-homes to) the parent view controller. An existing hosting
