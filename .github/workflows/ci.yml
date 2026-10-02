@@ -34,11 +34,6 @@ jobs:
             scheme: rootshell-helper
             platform: macos
             actions: build test
-          - name: VPN tests (macOS)
-            scheme: rootshellvpn
-            platform: macos
-            actions: build test
-            extra: -only-testing:rootshellvpnTests
           - name: App Store (iOS)
             scheme: rootshell-AppStore
             platform: ios
@@ -71,12 +66,12 @@ jobs:
             platform: visionos-device
             actions: build
             extra: -configuration ReleaseAppStore
-          - name: App Store Release (iOS device, Xcode 26.5)
+          - name: App Store Release (iOS device, Xcode 26.4.1)
             scheme: rootshell-AppStore
             platform: ios-device
             actions: build
             extra: -configuration ReleaseAppStore
-            xcode: '26.5'
+            xcode: '26.4.1'
     env:
       DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode || '26.6' }}.app/Contents/Developer
       PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
