@@ -23,11 +23,13 @@ jobs:
       matrix:
         include:
           # Test entries also run the scheme's build action, so the
-          # products under test are compiled too.
+          # products under test are compiled too. rootshellTests is the
+          # exception: it has no test host, and with "build test" xcodebuild
+          # offers no iOS Simulator destination for it.
           - name: Unit tests (iOS)
             scheme: rootshellTests
             platform: ios
-            actions: build test
+            actions: test
           - name: Helper tests (macOS)
             scheme: rootshell-helper
             platform: macos
