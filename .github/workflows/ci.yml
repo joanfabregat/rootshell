@@ -75,6 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+
       - name: Show Xcode version
         run: xcodebuild -version
 
@@ -85,20 +86,32 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('rootshell.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
-      # The generic iOS Simulator destination also builds x86_64, which fails
-      # in MainThreadStackSampler.swift (see AGENTS.md), so simulators are
-      # addressed by device id.
+      - name: Resolve Swift packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          .github/scripts/resolve-packages.sh "${{ matrix.scheme }}"
+          -clonedSourcePackagesDirPath "$PACKAGES_DIR"
+          -skipPackagePluginValidation -skipMacroValidation
+
+      # Simulators come from xcodebuild's own destination list, so the device
+      # is always one this scheme accepts. The generic iOS Simulator
+      # destination also builds x86_64, which fails in
+      # MainThreadStackSampler.swift (see AGENTS.md).
       - name: Resolve destination
         env:
           PLATFORM: ${{ matrix.platform }}
+          SCHEME: ${{ matrix.scheme }}
         run: |
           simulator() {
-            xcrun simctl list devices available --json | jq -r --arg runtime "$1" --arg device "$2" \
-              '[.devices | to_entries[] | select(.key | contains($runtime)) | .value[] | select(.name | startswith($device))] | last | .udid // empty'
+            xcodebuild -showdestinations -project rootshell.xcodeproj -scheme "$SCHEME" \
+              -clonedSourcePackagesDirPath "$PACKAGES_DIR" -skipPackagePluginValidation -skipMacroValidation |
+              grep -F "platform:$1 Simulator," | grep -F "name:$2" | grep -v 'Designed for' |
+              sed -n 's/.* id:\([^,]*\),.*/\1/p' | head -n 1
           }
           case "$PLATFORM" in
             ios) udid=$(simulator iOS iPhone); destination="id=$udid" ;;
-            visionos) udid=$(simulator xrOS "Apple Vision Pro"); destination="id=$udid" ;;
+            visionos) udid=$(simulator visionOS "Apple Vision Pro"); destination="id=$udid" ;;
             ios-device) udid=n/a; destination="generic/platform=iOS" ;;
             visionos-device) udid=n/a; destination="generic/platform=visionOS" ;;
             catalyst) udid=n/a; destination="platform=macOS,arch=arm64,variant=Mac Catalyst" ;;
@@ -106,8 +119,9 @@ jobs:
             *) echo "Unknown platform $PLATFORM" >&2; exit 1 ;;
           esac
           if [ -z "$udid" ]; then
-            echo "No available $PLATFORM simulator" >&2
-            xcrun simctl list devices available >&2
+            echo "xcodebuild lists no $PLATFORM simulator for $SCHEME" >&2
+            xcodebuild -showdestinations -project rootshell.xcodeproj -scheme "$SCHEME" \
+              -clonedSourcePackagesDirPath "$PACKAGES_DIR" >&2 || true
             exit 1
           fi
           echo "DESTINATION=$destination" >> "$GITHUB_ENV"
@@ -126,6 +140,7 @@ jobs:
             -scheme "$SCHEME" \
             -destination "$DESTINATION" \
             -clonedSourcePackagesDirPath "$PACKAGES_DIR" \
+            -disableAutomaticPackageResolution \
             -skipPackagePluginValidation \
             -skipMacroValidation \
             -quiet \
@@ -141,8 +156,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # deploy-vpn-host.sh builds into this derived data path by default;
+      # resolving there first lets its build reuse the downloaded packages.
+      - name: Resolve Swift packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          .github/scripts/resolve-packages.sh rootshellvpn
+          -derivedDataPath build/vpn-host/DerivedData
+
       - name: Unsigned universal compile check
-        run: scripts/deploy-vpn-host.sh --build-only
 
   scripts:
     name: Script tests (Linux)
