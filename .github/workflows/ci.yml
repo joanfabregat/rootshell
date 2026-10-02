@@ -26,9 +26,15 @@ jobs:
           # products under test are compiled too. rootshellTests is the
           # exception: it has no test host, and with "build test" xcodebuild
           # offers no iOS Simulator destination for it.
-          - name: Unit tests (iOS)
+          - name: Unit tests (iOS 26.2)
             scheme: rootshellTests
             platform: ios
+            os: '26.2'
+            actions: test
+          - name: Unit tests (iOS 26.5)
+            scheme: rootshellTests
+            platform: ios
+            os: '26.5'
             actions: test
           - name: Helper tests (macOS)
             scheme: rootshell-helper
@@ -66,18 +72,17 @@ jobs:
             platform: visionos-device
             actions: build
             extra: -configuration ReleaseAppStore
-          - name: App Store Release (iOS device, Xcode 26.4.1)
+          # Archive is how release builds are produced; compare with build.
+          - name: App Store Archive (iOS device)
             scheme: rootshell-AppStore
             platform: ios-device
-            actions: build
-            extra: -configuration ReleaseAppStore
-            xcode: '26.4.1'
+            actions: archive
+            extra: -configuration ReleaseAppStore -archivePath build/rootshell.xcarchive
     env:
       DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode || '26.6' }}.app/Contents/Developer
       PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
 
       - name: Show Xcode version
         run: xcodebuild -version
