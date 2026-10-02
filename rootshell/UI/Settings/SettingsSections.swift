@@ -426,8 +426,6 @@ struct SettingsTerminalSection: View {
                 #endif
                 #endif
 
-                NewTabActionSettingsRow()
-
                 NavigationLink(value: SettingsSearchDestination.keyboardShortcuts) {
                     HStack(spacing: 12) {
                         SettingsIcon(systemName: "command")
@@ -475,6 +473,31 @@ struct SettingsTerminalSection: View {
                 #endif
             } header: {
                 Text("Keyboard")
+            }
+
+            // MARK: - Tabs
+            Section {
+                NewTabActionSettingsRow()
+
+                MultiplexerTabCloseActionSettingsRow()
+
+                SettingDescribedToggle(
+                    Settings.Window.confirmBeforeClosingTab,
+                    title: "Confirm Before Closing Tab",
+                    description: "Ask before ⌘W on a tab's last pane, the tab's ✕, or Close Tab closes a tab."
+                )
+                .themedRow()
+
+                SettingDescribedToggle(
+                    Settings.Window.confirmBeforeClosingPane,
+                    title: "Confirm Before Closing Pane",
+                    description: "Ask before ⌘W, or a custom Close Tab/Split shortcut, closes one pane in a multi-pane layout."
+                )
+                .themedRow()
+            } header: {
+                Text("Tabs")
+            } footer: {
+                Text("The tab-bar + always opens Connections. tmux -CC and herdr control-mode tabs follow the Multiplexer Close Tab Action instead of the tab confirmation; choose Ask Each Time to confirm those.")
             }
 
             // MARK: - Gestures
@@ -751,7 +774,13 @@ struct SettingsConnectionsSection: View {
     @ObservedObject var wifiAPAccountManager = WiFiAPAccountManager.shared
     @Setting(Settings.Multiplexer.tmuxSessionName) private var tmuxSessionName
     @Setting(Settings.Multiplexer.tmuxCustomCommand) private var tmuxCustomCommand
+    @Setting(Settings.Transfer.attachmentUploadConfirm) private var attachmentUploadConfirm
+    @Setting(Settings.Transfer.attachmentUploadFormat) private var attachmentUploadFormat
     @State private var showClearHistoryAlert = false
+
+    private var uploadSettingsSummary: String {
+        attachmentUploadConfirm ? String(localized: "Ask", comment: "Uploads setting summary: prompt each time") : attachmentUploadFormat.displayName
+    }
 
     private var multiplexerSettingsSummary: String {
         if !tmuxCustomCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1026,6 +1055,21 @@ struct SettingsConnectionsSection: View {
                 }
                 .themedRow()
                 .settingGroupContextMenu(.screenSharing)
+
+                NavigationLink(value: SettingsSearchDestination.uploads) {
+                    HStack(spacing: 12) {
+                        SettingsIcon(systemName: "arrow.up.doc")
+                        Text("Uploads")
+                        SettingPinTag(group: .transfer)
+                        Spacer()
+                        Text(uploadSettingsSummary)
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                    }
+                }
+                .themedRow()
+                .settingGroupContextMenu(.transfer)
 
                 NavigationLink(value: SettingsSearchDestination.sshTransport) {
                     HStack(spacing: 12) {

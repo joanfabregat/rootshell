@@ -29,6 +29,7 @@ enum SettingsSearchDestination: String, Hashable, CaseIterable {
     case dictationModels
     case dictationVocabulary
     case newTabAction
+    case multiplexerTabCloseAction
     case keyboardShortcuts
     case modTap
     case gestureHelp
@@ -55,6 +56,7 @@ enum SettingsSearchDestination: String, Hashable, CaseIterable {
     case vpn
     case roam
     case screenSharing
+    case uploads
     case sshTransport
     case multiplexers
     case codingAgents
@@ -186,6 +188,9 @@ extension SettingsSearchDestination {
         case .newTabAction:
             Meta(section: .terminal, title: String(localized: "New Tab Action"), systemImage: "plus.rectangle.on.rectangle",
                  keywords: ["new tab", "local", "ssh", "tmux", "last connection", "default"])
+        case .multiplexerTabCloseAction:
+            Meta(section: .terminal, title: String(localized: "Multiplexer Close Tab Action"), systemImage: "xmark.rectangle",
+                 keywords: ["tmux", "herdr", "close tab", "kill window", "detach", "hide tab", "control mode"])
         case .keyboardShortcuts:
             Meta(section: .terminal, title: String(localized: "Keyboard Shortcuts"), systemImage: "command",
                  keywords: ["keybinds", "hotkeys", "category", "keybind editor", "reset"])
@@ -274,6 +279,9 @@ extension SettingsSearchDestination {
         case .screenSharing:
             Meta(section: .connections, title: String(localized: "Screen Sharing"), systemImage: "display.2",
                  keywords: ["vnc", "remote desktop", "clipboard", "panning", "pointer", "encryption", "tunnel"])
+        case .uploads:
+            Meta(section: .connections, title: String(localized: "Uploads"), systemImage: "arrow.up.doc",
+                 keywords: ["upload", "image", "paste", "drop", "attachment", "markdown", "sftp", "pdf", "screenshot"])
         case .sshTransport:
             Meta(section: .connections, title: String(localized: "SSH Transport"), systemImage: "shield.lefthalf.filled",
                  keywords: ["ssh", "transport", "health", "probe", "post-quantum", "kex"])
@@ -737,6 +745,12 @@ struct SettingsSearchEntry: Identifiable, Hashable {
             row("two-finger-long-press", String(localized: "Two-Finger Long Press"), in: .terminal, icon: "hand.point.up.left",
                 keywords: ["gesture", "new connection", "duration", "long press"], available: !isCatalyst),
 
+            // MARK: Terminal › Tabs (inline)
+            row("confirm-close-tab", String(localized: "Confirm Before Closing Tab"), in: .terminal, icon: "xmark.square",
+                keywords: ["close tab", "confirm", "warn", "cmd w", "accidental close"]),
+            row("confirm-close-pane", String(localized: "Confirm Before Closing Pane"), in: .terminal, icon: "rectangle.split.2x1",
+                keywords: ["close pane", "close split", "confirm", "warn", "cmd w"]),
+
             // MARK: Terminal › Session (inline)
             row("restore-sessions", String(localized: "Restore Sessions on Launch"), in: .terminal, icon: "arrow.counterclockwise",
                 keywords: ["session restore", "startup"], suggested: true),
@@ -806,8 +820,6 @@ struct SettingsSearchEntry: Identifiable, Hashable {
                 keywords: ["detach", "banner", "reconnect", "notification"]),
             row("mux-auto-hide-gateway", String(localized: "Auto-hide Gateway on Attach"), in: .multiplexers, icon: "eye.slash",
                 keywords: ["control mode", "gateway", "attach"]),
-            row("mux-close-tab-action", String(localized: "Close Tab Action"), in: .multiplexers, icon: "xmark.rectangle",
-                keywords: ["tmux", "close tab", "kill window", "detach"]),
             row("mux-auto-start", String(localized: "Auto-Start Command"), in: .multiplexers, icon: "play.rectangle",
                 keywords: ["tmux", "herdr", "zmx", "auto start", "attach"]),
             row("mux-tips", String(localized: "Multiplexer Tips"), in: .multiplexers, icon: "questionmark.circle",
@@ -931,6 +943,14 @@ struct SettingsSearchEntry: Identifiable, Hashable {
             row("screen-sharing-cursor-size", String(localized: "Cursor Size"), in: .screenSharing, icon: "arrow.up.left.and.arrow.down.right",
                 keywords: ["cursor", "pointer", "size", "small", "medium", "large",
                            "bigger", "trackpad"]),
+
+            // MARK: Uploads
+            row("uploads-confirm", String(localized: "Ask Before Uploading"), in: .uploads, icon: "questionmark.bubble",
+                keywords: ["prompt", "don't ask again", "upload sheet", "paste image", "drop", "confirm"]),
+            row("uploads-format", String(localized: "Insert Uploads As"), in: .uploads, icon: "text.insert",
+                keywords: ["markdown image", "file path", "format", "paste image", "default"]),
+            row("uploads-directory", String(localized: "Default Upload Directory"), in: .uploads, icon: "folder",
+                keywords: ["remote path", "destination", "tmp", "remembered directories", "per host"]),
 
             // MARK: Connections (inline)
             row("clear-connection-history", String(localized: "Clear Connection History"), in: .connections, icon: "trash",
@@ -1139,6 +1159,8 @@ func settingsSearchDestinationView(for destination: SettingsSearchDestination) -
         #endif
     case .newTabAction:
         NewTabActionPickerView()
+    case .multiplexerTabCloseAction:
+        MultiplexerTabCloseActionPickerView()
     case .keyboardShortcuts:
         KeyboardShortcutsSettingsView()
     case .modTap:
@@ -1215,6 +1237,8 @@ func settingsSearchDestinationView(for destination: SettingsSearchDestination) -
         RoamSettingsView()
     case .screenSharing:
         ScreenSharingSettingsView()
+    case .uploads:
+        AttachmentUploadSettingsView()
     case .sshTransport:
         SSHTransportSettingsView()
     case .multiplexers:
