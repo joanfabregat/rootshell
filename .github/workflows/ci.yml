@@ -172,6 +172,7 @@ jobs:
           -derivedDataPath build/vpn-host/DerivedData
 
       - name: Unsigned universal compile check
+        run: scripts/deploy-vpn-host.sh --build-only
 
   scripts:
     name: Script tests (Linux)
