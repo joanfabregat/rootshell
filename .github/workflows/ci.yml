@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  xcode:
+    name: Unit tests and simulator build
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # The generic simulator destination also builds x86_64, which fails in
+      # MainThreadStackSampler.swift (see AGENTS.md), so use a device id.
+      - name: Pick an iPhone simulator
+        run: |
+          udid=$(xcrun simctl list devices available --json |
+            jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))][0].udid')
+          test -n "$udid" && test "$udid" != null
+          echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl list devices available | grep "$udid"
+
+      - name: Run rootshellTests
+        run: |
+          xcodebuild test \
+            -project rootshell.xcodeproj \
+            -scheme rootshellTests \
+            -destination "id=$SIMULATOR_UDID" \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build rootshell-AppStore for the simulator
+        run: |
+          xcodebuild build \
+            -project rootshell.xcodeproj \
+            -scheme rootshell-AppStore \
+            -destination "id=$SIMULATOR_UDID" \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO
+
+  scripts:
+    name: Script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Run Python script tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+
+      - name: Run shell script tests
+        run: |
+          for test in scripts/tests/test_*.sh; do
+            [ -e "$test" ] || continue
+            echo "== $test"
+            sh "$test"
+          done
