@@ -110,12 +110,13 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           SCHEME: ${{ matrix.scheme }}
+          OS: ${{ matrix.os }}
         run: |
           simulator() {
             xcodebuild -showdestinations -project rootshell.xcodeproj -scheme "$SCHEME" \
               -clonedSourcePackagesDirPath "$PACKAGES_DIR" -skipPackagePluginValidation -skipMacroValidation |
               grep -F "platform:$1 Simulator," | grep -F "name:$2" | grep -v 'Designed for' |
-              sed -n 's/.* id:\([^,]*\),.*/\1/p' | head -n 1
+              grep -F "OS:${OS}" | sed -n 's/.* id:\([^,]*\),.*/\1/p' | head -n 1
           }
           case "$PLATFORM" in
             ios) udid=$(simulator iOS iPhone); destination="id=$udid" ;;
@@ -151,9 +152,18 @@ jobs:
             -disableAutomaticPackageResolution \
             -skipPackagePluginValidation \
             -skipMacroValidation \
+            -resultBundlePath "$RUNNER_TEMP/result.xcresult" \
             -quiet \
             CODE_SIGNING_ALLOWED=NO \
             $EXTRA $ACTIONS
+
+      # -quiet drops assertion messages from the log; read them back from
+      # the result bundle.
+      - name: Show test failures
+        if: failure() && contains(matrix.actions, 'test')
+        run: |
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/result.xcresult" |
+            jq -r '.testFailures[]? | "\(.testIdentifierString // .testName): \(.failureText)"'
 
   vpn-host:
     name: VPN host universal build (macOS)
