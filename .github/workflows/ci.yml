@@ -1,8 +1,9 @@
 name: CI
 
+# Fast checks for every pull request. The slower Release, visionOS, Mac
+# Catalyst and VPN host builds are in full-ci.yml.
+
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -14,8 +15,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      xcode: ${{ steps.filter.outputs.xcode }}
+    steps:
+      # A required check that is skipped counts as passed, so a pull request
+      # that only touches documentation or script tests can merge without
+      # the Xcode jobs. Markdown under Resources/ is bundled into the app.
+      - name: Check whether the Xcode jobs are needed
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$PR" ]; then
+            echo "xcode=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+          printf '%s\n' "$files"
+          if printf '%s\n' "$files" |
+            awk '!/^docs\// && !/^scripts\/tests\// && $0 != "LICENSE" && !(/\.md$/ && !/^Resources\//)' |
+            grep -q .; then
+            echo "xcode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "xcode=false" >> "$GITHUB_OUTPUT"
+          fi
+
   xcode:
     name: ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.xcode == 'true'
     runs-on: xcode-27
     timeout-minutes: 90
     strategy:
@@ -26,160 +61,43 @@ jobs:
           # products under test are compiled too. rootshellTests is the
           # exception: it has no test host, and with "build test" xcodebuild
           # offers no iOS Simulator destination for it.
-          - name: Unit tests (iOS 27.0)
-            scheme: rootshellTests
+          - name: iOS tests and builds
+            cache: ios-simulator
             platform: ios
             os: '27.0'
-            actions: test
+            resolve: rootshell-AppStore
+            builds: |
+              -scheme rootshellTests test
+              -scheme rootshell-AppStore build
+              -scheme rootshell-China build
           - name: Helper tests (macOS)
-            scheme: rootshell-helper
+            cache: helper
             platform: macos
-            actions: build test
-          - name: App Store (iOS)
-            scheme: rootshell-AppStore
-            platform: ios
-            actions: build
-          - name: App Store (visionOS)
-            scheme: rootshell-AppStore
-            platform: visionos
-            actions: build
-          - name: App Store (Mac Catalyst)
-            scheme: rootshell-AppStore
-            platform: catalyst
-            actions: build
-          - name: Standalone (Mac Catalyst)
-            scheme: rootshell-Standalone
-            platform: catalyst
-            actions: build
-          - name: China (iOS)
-            scheme: rootshell-China
-            platform: ios
-            actions: build
-          # Shipping configuration: device SDK and Release optimizations,
-          # which simulator Debug builds do not exercise.
-          - name: App Store Release (iOS device)
-            scheme: rootshell-AppStore
-            platform: ios-device
-            actions: build
-            extra: -configuration ReleaseAppStore
-          - name: App Store Release (visionOS device)
-            scheme: rootshell-AppStore
-            platform: visionos-device
-            actions: build
-            extra: -configuration ReleaseAppStore
-          # Archive is how release builds are produced; compare with build.
-          - name: App Store Archive (iOS device)
-            scheme: rootshell-AppStore
-            platform: ios-device
-            actions: archive
-            extra: -configuration ReleaseAppStore -archivePath build/rootshell.xcarchive
+            resolve: rootshell-helper
+            builds: |
+              -scheme rootshell-helper build test
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
+      DERIVED_DATA: ${{ github.workspace }}/.build/DerivedData
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Cache Swift packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/xcode-setup
         with:
-          path: .build/SourcePackages
-          key: spm-${{ runner.os }}-${{ hashFiles('rootshell.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          cache: ${{ matrix.cache }}
+          scheme: ${{ matrix.resolve }}
+          resolve-args: -clonedSourcePackagesDirPath ${{ env.PACKAGES_DIR }}
 
-      - name: Resolve Swift packages
+      - name: xcodebuild
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          .github/scripts/resolve-packages.sh "${{ matrix.scheme }}"
-          -clonedSourcePackagesDirPath "$PACKAGES_DIR"
-          -skipPackagePluginValidation -skipMacroValidation
-
-      # Simulators come from xcodebuild's own destination list, so the device
-      # is always one this scheme accepts. The generic iOS Simulator
-      # destination also builds x86_64, which fails in
-      # MainThreadStackSampler.swift (see AGENTS.md).
-      - name: Resolve destination
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          SCHEME: ${{ matrix.scheme }}
           OS: ${{ matrix.os }}
-        run: |
-          simulator() {
-            xcodebuild -showdestinations -project rootshell.xcodeproj -scheme "$SCHEME" \
-              -clonedSourcePackagesDirPath "$PACKAGES_DIR" -skipPackagePluginValidation -skipMacroValidation |
-              grep -F "platform:$1 Simulator," | grep -F "name:$2" | grep -v 'Designed for' |
-              grep -F "OS:${OS}" | sed -n 's/.* id:\([^,]*\),.*/\1/p' | head -n 1
-          }
-          case "$PLATFORM" in
-            ios) udid=$(simulator iOS iPhone); destination="id=$udid" ;;
-            visionos) udid=$(simulator visionOS "Apple Vision Pro"); destination="id=$udid" ;;
-            ios-device) udid=n/a; destination="generic/platform=iOS" ;;
-            visionos-device) udid=n/a; destination="generic/platform=visionOS" ;;
-            catalyst) udid=n/a; destination="platform=macOS,arch=arm64,variant=Mac Catalyst" ;;
-            macos) udid=n/a; destination="platform=macOS,arch=arm64" ;;
-            *) echo "Unknown platform $PLATFORM" >&2; exit 1 ;;
-          esac
-          if [ -z "$udid" ]; then
-            echo "xcodebuild lists no $PLATFORM simulator for $SCHEME" >&2
-            xcodebuild -showdestinations -project rootshell.xcodeproj -scheme "$SCHEME" \
-              -clonedSourcePackagesDirPath "$PACKAGES_DIR" >&2 || true
-            exit 1
-          fi
-          echo "DESTINATION=$destination" >> "$GITHUB_ENV"
-          echo "Destination: $destination"
-
-      - name: xcodebuild ${{ matrix.actions }}
-        env:
-          SCHEME: ${{ matrix.scheme }}
-          ACTIONS: ${{ matrix.actions }}
-          EXTRA: ${{ matrix.extra }}
-        run: |
-          # ACTIONS and EXTRA hold space-separated words from the matrix.
-          # shellcheck disable=SC2086
-          xcodebuild \
-            -project rootshell.xcodeproj \
-            -scheme "$SCHEME" \
-            -destination "$DESTINATION" \
-            -clonedSourcePackagesDirPath "$PACKAGES_DIR" \
-            -disableAutomaticPackageResolution \
-            -skipPackagePluginValidation \
-            -skipMacroValidation \
-            -resultBundlePath "$RUNNER_TEMP/result.xcresult" \
-            -quiet \
-            CODE_SIGNING_ALLOWED=NO \
-            $EXTRA $ACTIONS
-
-      # -quiet drops assertion messages from the log; read them back from
-      # the result bundle.
-      - name: Show test failures
-        if: failure() && contains(matrix.actions, 'test')
-        run: |
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/result.xcresult" |
-            jq -r '.testFailures[]? | "\(.testIdentifierString // .testName): \(.failureText)"'
-
-  vpn-host:
-    name: VPN host universal build (macOS)
-    runs-on: xcode-27
-    timeout-minutes: 60
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # deploy-vpn-host.sh builds into this derived data path by default;
-      # resolving there first lets its build reuse the downloaded packages.
-      - name: Resolve Swift packages
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          .github/scripts/resolve-packages.sh rootshellvpn
-          -derivedDataPath build/vpn-host/DerivedData
-
-      - name: Unsigned universal compile check
-        run: scripts/deploy-vpn-host.sh --build-only
+          BUILDS: ${{ matrix.builds }}
+          PLATFORM: ${{ matrix.platform }}
+        run: .github/scripts/xcode-builds.sh "$PLATFORM"
 
   scripts:
     name: Script tests (Linux)
