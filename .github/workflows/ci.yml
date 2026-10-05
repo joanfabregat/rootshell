@@ -16,7 +16,7 @@ concurrency:
 jobs:
   xcode:
     name: ${{ matrix.name }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -26,15 +26,10 @@ jobs:
           # products under test are compiled too. rootshellTests is the
           # exception: it has no test host, and with "build test" xcodebuild
           # offers no iOS Simulator destination for it.
-          - name: Unit tests (iOS 26.2)
+          - name: Unit tests (iOS 27.0)
             scheme: rootshellTests
             platform: ios
-            os: '26.2'
-            actions: test
-          - name: Unit tests (iOS 26.5)
-            scheme: rootshellTests
-            platform: ios
-            os: '26.5'
+            os: '27.0'
             actions: test
           - name: Helper tests (macOS)
             scheme: rootshell-helper
@@ -79,7 +74,7 @@ jobs:
             actions: archive
             extra: -configuration ReleaseAppStore -archivePath build/rootshell.xcarchive
     env:
-      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode || '26.6' }}.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,10 +162,10 @@ jobs:
 
   vpn-host:
     name: VPN host universal build (macOS)
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
