@@ -1,0 +1,175 @@
+name: Full CI
+
+# The slow builds: Release for devices, visionOS, Mac Catalyst, China and
+# the VPN host. They run on pull requests labeled full-ci, nightly when the
+# default branch changed in the last day, and on demand. Their check names
+# differ from ci.yml's, so they never block a merge unless made required.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '0 11 * * *' # 11:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Adding an unrelated label must not cancel a run in progress, so those
+# events get a group of their own (and the gate skips them).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'full-ci' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Decide whether to run
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Skip nightly runs without new commits
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          run=true
+          if [ "$EVENT" = schedule ]; then
+            since=$(date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ)
+            count=$(gh api "repos/$GITHUB_REPOSITORY/commits?sha=$BRANCH&since=$since&per_page=1" --jq length)
+            [ "$count" -gt 0 ] || run=false
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  xcode:
+    name: ${{ matrix.name }}
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      # A Free account runs 5 macOS jobs at once. Two here plus the VPN host
+      # leave two for ci.yml's three; its helper job takes about 4 minutes,
+      # so a fast job waits at most that long for a runner.
+      max-parallel: 2
+      matrix:
+        include:
+          # Shipping configuration: device SDK and Release optimizations,
+          # which simulator Debug builds do not exercise.
+          - name: App Store Release (iOS device)
+            cache: ios-release
+            platform: ios-device
+            resolve: rootshell-AppStore
+            builds: |
+              -scheme rootshell-AppStore -configuration ReleaseAppStore build
+          - name: App Store Release (visionOS device)
+            cache: visionos-release
+            platform: visionos-device
+            resolve: rootshell-AppStore
+            builds: |
+              -scheme rootshell-AppStore -configuration ReleaseAppStore build
+          - name: App Store (visionOS)
+            cache: visionos-simulator
+            platform: visionos
+            os: '27.0'
+            resolve: rootshell-AppStore
+            builds: |
+              -scheme rootshell-AppStore build
+          - name: Mac Catalyst (App Store, Standalone)
+            cache: catalyst
+            platform: catalyst
+            resolve: rootshell-AppStore
+            builds: |
+              -scheme rootshell-AppStore build
+              -scheme rootshell-Standalone build
+          # China builds the App Store sources with another configuration,
+          # so it reads ci.yml's App Store cache and saves none of its own.
+          - name: China (iOS simulator)
+            cache: ios-app
+            save: 'false'
+            platform: ios
+            os: '27.0'
+            resolve: rootshell-China
+            builds: |
+              -scheme rootshell-China build
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
+      DERIVED_DATA: ${{ github.workspace }}/.build/DerivedData
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - uses: ./.github/actions/xcode-setup
+        id: setup
+        with:
+          cache: ${{ matrix.cache }}
+          scheme: ${{ matrix.resolve }}
+          resolve-args: -clonedSourcePackagesDirPath ${{ env.PACKAGES_DIR }}
+
+      - name: xcodebuild
+        env:
+          OS: ${{ matrix.os }}
+          BUILDS: ${{ matrix.builds }}
+          PLATFORM: ${{ matrix.platform }}
+        run: .github/scripts/xcode-builds.sh "$PLATFORM"
+
+      - uses: ./.github/actions/xcode-cache-save
+        if: ${{ !cancelled() && matrix.save != 'false' }}
+        with:
+          spm-key: ${{ steps.setup.outputs.spm-key }}
+          spm-hit: ${{ steps.setup.outputs.spm-hit }}
+          cas-key: ${{ steps.setup.outputs.cas-key }}
+          save-on-pr: ${{ vars.CI_SAVE_CACHES_ON_PR }}
+
+  vpn-host:
+    name: VPN host universal build (macOS)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # deploy-vpn-host.sh builds into build/vpn-host/DerivedData. Pointing
+      # its SourcePackages at the shared package cache saves a second 2 GB
+      # cache entry and, on an exact hit, the package resolution.
+      - name: Share the package checkouts
+        run: |
+          mkdir -p build/vpn-host/DerivedData
+          ln -s "$GITHUB_WORKSPACE/.build/SourcePackages" build/vpn-host/DerivedData/SourcePackages
+
+      - uses: ./.github/actions/xcode-setup
+        id: setup
+        with:
+          cache: vpn-host
+          scheme: rootshellvpn
+          resolve-args: -derivedDataPath build/vpn-host/DerivedData
+          # deploy-vpn-host.sh resolves again without credentials, which
+          # api.github.com rejects with 403; resolving first makes that a
+          # no-op.
+          always-resolve: 'true'
+          metal: 'false'
+
+      - name: Unsigned universal compile check
+        run: scripts/deploy-vpn-host.sh --build-only
+
+      - uses: ./.github/actions/xcode-cache-save
+        if: ${{ !cancelled() }}
+        with:
+          spm-key: ${{ steps.setup.outputs.spm-key }}
+          spm-hit: ${{ steps.setup.outputs.spm-hit }}
+          cas-key: ${{ steps.setup.outputs.cas-key }}
+          save-on-pr: ${{ vars.CI_SAVE_CACHES_ON_PR }}

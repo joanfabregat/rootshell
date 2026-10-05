@@ -1,0 +1,159 @@
+name: CI
+
+# Fast checks for every pull request. The slower Release, visionOS, Mac
+# Catalyst, China and VPN host builds are in full-ci.yml.
+
+on:
+  pull_request:
+  # A pull request reads only its own caches and the base branch's, so a
+  # nightly run on the default branch gives each new pull request a warm
+  # compilation cache.
+  schedule:
+    - cron: '0 11 * * *' # 11:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      xcode: ${{ steps.filter.outputs.xcode }}
+    steps:
+      # A required check that is skipped counts as passed, so a pull request
+      # that only touches documentation or script tests can merge without
+      # the Xcode jobs. Markdown under Resources/ is bundled into the app.
+      # Nightly runs are skipped when the default branch has no new commits.
+      - name: Check whether the Xcode jobs are needed
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$EVENT" = schedule ]; then
+            since=$(date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ)
+            count=$(gh api "repos/$GITHUB_REPOSITORY/commits?sha=$BRANCH&since=$since&per_page=1" --jq length)
+            if [ "$count" -gt 0 ]; then xcode=true; else xcode=false; fi
+            echo "xcode=$xcode" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$PR" ]; then
+            echo "xcode=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+          printf '%s\n' "$files"
+          if printf '%s\n' "$files" |
+            awk '!/^docs\// && !/^scripts\/tests\// && $0 != "LICENSE" && !(/\.md$/ && !/^Resources\//)' |
+            grep -q .; then
+            echo "xcode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "xcode=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  xcode:
+    name: ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.xcode == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Test entries also run the scheme's build action, so the
+          # products under test are compiled too. rootshellTests is the
+          # exception: it has no test host, and with "build test" xcodebuild
+          # offers no iOS Simulator destination for it.
+          #
+          # rootshellTests compiles the app sources itself, so a build of the
+          # app after it reuses little; the two run as separate jobs. The
+          # China variant builds in full-ci.yml.
+          - name: Unit tests (iOS)
+            cache: ios-simulator
+            fallback-cache: ios-app
+            platform: ios
+            os: '27.0'
+            resolve: rootshell-AppStore
+            builds: |
+              -scheme rootshellTests test
+          - name: App Store (iOS simulator)
+            cache: ios-app
+            fallback-cache: ios-simulator
+            platform: ios
+            os: '27.0'
+            resolve: rootshell-AppStore
+            builds: |
+              -scheme rootshell-AppStore build
+          - name: Helper tests (macOS)
+            cache: helper
+            platform: macos
+            resolve: rootshell-helper
+            metal: 'false'
+            builds: |
+              -scheme rootshell-helper build test
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
+      DERIVED_DATA: ${{ github.workspace }}/.build/DerivedData
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - uses: ./.github/actions/xcode-setup
+        id: setup
+        with:
+          cache: ${{ matrix.cache }}
+          fallback-cache: ${{ matrix.fallback-cache }}
+          scheme: ${{ matrix.resolve }}
+          resolve-args: -clonedSourcePackagesDirPath ${{ env.PACKAGES_DIR }}
+          metal: ${{ matrix.metal || 'true' }}
+
+      - name: xcodebuild
+        env:
+          OS: ${{ matrix.os }}
+          BUILDS: ${{ matrix.builds }}
+          PLATFORM: ${{ matrix.platform }}
+        run: .github/scripts/xcode-builds.sh "$PLATFORM"
+
+      - uses: ./.github/actions/xcode-cache-save
+        if: ${{ !cancelled() }}
+        with:
+          spm-key: ${{ steps.setup.outputs.spm-key }}
+          spm-hit: ${{ steps.setup.outputs.spm-hit }}
+          cas-key: ${{ steps.setup.outputs.cas-key }}
+          save-on-pr: ${{ vars.CI_SAVE_CACHES_ON_PR }}
+
+  scripts:
+    name: Script tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Run Python script tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+
+      - name: Run shell script tests
+        run: |
+          for test in scripts/tests/test_*.sh; do
+            [ -e "$test" ] || continue
+            echo "== $test"
+            sh "$test"
+          done

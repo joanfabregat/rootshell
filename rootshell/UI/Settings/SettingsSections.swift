@@ -426,8 +426,6 @@ struct SettingsTerminalSection: View {
                 #endif
                 #endif
 
-                NewTabActionSettingsRow()
-
                 NavigationLink(value: SettingsSearchDestination.keyboardShortcuts) {
                     HStack(spacing: 12) {
                         SettingsIcon(systemName: "command")
@@ -475,6 +473,31 @@ struct SettingsTerminalSection: View {
                 #endif
             } header: {
                 Text("Keyboard")
+            }
+
+            // MARK: - Tabs
+            Section {
+                NewTabActionSettingsRow()
+
+                MultiplexerTabCloseActionSettingsRow()
+
+                SettingDescribedToggle(
+                    Settings.Window.confirmBeforeClosingTab,
+                    title: "Confirm Before Closing Tab",
+                    description: "Ask before ⌘W on a tab's last pane, the tab's ✕, or Close Tab closes a tab."
+                )
+                .themedRow()
+
+                SettingDescribedToggle(
+                    Settings.Window.confirmBeforeClosingPane,
+                    title: "Confirm Before Closing Pane",
+                    description: "Ask before ⌘W, or a custom Close Tab/Split shortcut, closes one pane in a multi-pane layout."
+                )
+                .themedRow()
+            } header: {
+                Text("Tabs")
+            } footer: {
+                Text("The tab-bar + always opens Connections. tmux -CC and herdr control-mode tabs follow the Multiplexer Close Tab Action instead of the tab confirmation; choose Ask Each Time to confirm those.")
             }
 
             // MARK: - Gestures
@@ -732,6 +755,19 @@ struct SettingsTerminalSection: View {
                 Text("Shell")
             }
 #endif
+
+            // MARK: - Program Links
+            Section {
+                SettingToggle(Settings.Terminal.openLinksFromPrograms,
+                              title: "Open Links from Programs", icon: "link")
+                    .themedRow()
+                Text("Let programs open web links in this device's browser using iTerm2's OpenURL sequence (OSC 1337). For Mosh and tmux -CC, use the rootshell-open-clipboard helper.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .themedRow()
+            } header: {
+                Text("Program Links")
+            }
         }
         .themedList()
         .navigationTitle("Terminal")
@@ -741,8 +777,6 @@ struct SettingsTerminalSection: View {
 
 /// Connections section detail (SSH Keys, Passwords, Known Hosts, SSH Shortcuts, Cloud, K8s, etc.)
 struct SettingsConnectionsSection: View {
-    var navigateToVPN: Binding<Bool>? = nil
-
     @ObservedObject var sshKeyManager = SSHKeyManager.shared
     @ObservedObject var sshHistoryManager = SSHConnectionHistoryManager.shared
     @ObservedObject var hssConfigManager = HSSConfigManager.shared
@@ -751,7 +785,13 @@ struct SettingsConnectionsSection: View {
     @ObservedObject var wifiAPAccountManager = WiFiAPAccountManager.shared
     @Setting(Settings.Multiplexer.tmuxSessionName) private var tmuxSessionName
     @Setting(Settings.Multiplexer.tmuxCustomCommand) private var tmuxCustomCommand
+    @Setting(Settings.Transfer.attachmentUploadConfirm) private var attachmentUploadConfirm
+    @Setting(Settings.Transfer.attachmentUploadFormat) private var attachmentUploadFormat
     @State private var showClearHistoryAlert = false
+
+    private var uploadSettingsSummary: String {
+        attachmentUploadConfirm ? String(localized: "Ask", comment: "Uploads setting summary: prompt each time") : attachmentUploadFormat.displayName
+    }
 
     private var multiplexerSettingsSummary: String {
         if !tmuxCustomCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -978,31 +1018,6 @@ struct SettingsConnectionsSection: View {
                 }
                 .themedRow()
 
-                #if !CHINA_BUILD && (!targetEnvironment(macCatalyst) || STANDALONE)
-                NavigationLink(value: SettingsSearchDestination.vpn) {
-                    HStack(spacing: 12) {
-                        SettingsIcon(systemName: "network.badge.shield.half.filled")
-                        Text("VPN")
-                        Spacer()
-                        if VPNManager.shared.status.isActive {
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(.green)
-                                    .frame(width: 8, height: 8)
-                                Text("Active")
-                                    .foregroundColor(.secondary)
-                                    .font(.subheadline)
-                            }
-                        } else {
-                            Text("Off")
-                                .foregroundColor(.secondary)
-                                .font(.subheadline)
-                        }
-                    }
-                }
-                .themedRow()
-                #endif
-
                 NavigationLink(value: SettingsSearchDestination.roam) {
                     HStack(spacing: 12) {
                         SettingsIcon(systemName: "antenna.radiowaves.left.and.right")
@@ -1026,6 +1041,21 @@ struct SettingsConnectionsSection: View {
                 }
                 .themedRow()
                 .settingGroupContextMenu(.screenSharing)
+
+                NavigationLink(value: SettingsSearchDestination.uploads) {
+                    HStack(spacing: 12) {
+                        SettingsIcon(systemName: "arrow.up.doc")
+                        Text("Uploads")
+                        SettingPinTag(group: .transfer)
+                        Spacer()
+                        Text(uploadSettingsSummary)
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                    }
+                }
+                .themedRow()
+                .settingGroupContextMenu(.transfer)
 
                 NavigationLink(value: SettingsSearchDestination.sshTransport) {
                     HStack(spacing: 12) {
@@ -1085,11 +1115,6 @@ struct SettingsConnectionsSection: View {
         } message: {
             Text("This will remove all saved SSH connection history used for auto-completion. This action cannot be undone.")
         }
-        #if !CHINA_BUILD && (!targetEnvironment(macCatalyst) || STANDALONE)
-        .navigationDestination(isPresented: navigateToVPN ?? .constant(false)) {
-            VPNSettingsView()
-        }
-        #endif
     }
 }
 
@@ -1177,8 +1202,21 @@ struct SettingsAISection: View {
     }
 }
 
-/// Privacy & Data section detail
-struct SettingsPrivacySection: View {
+/// General section detail: privacy & data, notifications, sounds and updates.
+struct SettingsGeneralSection: View {
+    var body: some View {
+        List {
+            SettingsPrivacyContent()
+            SettingsNotificationsContent()
+        }
+        .themedList()
+        .navigationTitle("General")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Privacy & Data sections of General.
+struct SettingsPrivacyContent: View {
     @ObservedObject var notificationManager = NotificationManager.shared
     var clipboardManager = ClipboardHistoryManager.shared
     var redactionManager = RedactionManager.shared
@@ -1199,7 +1237,7 @@ struct SettingsPrivacySection: View {
 #endif
 
     var body: some View {
-        List {
+        Group {
             Section {
                 NavigationLink(value: SettingsSearchDestination.iCloudSync) {
                     HStack(spacing: 12) {
@@ -1364,6 +1402,8 @@ struct SettingsPrivacySection: View {
                 }
                 .themedRow()
                 .settingGroupContextMenu(.privacy)
+            } header: {
+                Text("Privacy & Data")
             } footer: {
 #if targetEnvironment(macCatalyst)
                 Text("Data synchronization settings")
@@ -1374,14 +1414,11 @@ struct SettingsPrivacySection: View {
 #endif
             }
         }
-        .themedList()
-        .navigationTitle("Privacy & Data")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
-/// Notifications & Sounds section detail (merged)
-struct SettingsNotificationsSection: View {
+/// Notifications, Sounds and Updates sections of General.
+struct SettingsNotificationsContent: View {
     @ObservedObject var notificationManager = NotificationManager.shared
     @ObservedObject var soundManager = SoundManager.shared
     private let pushManager = PushRegistrationManager.shared
@@ -1394,7 +1431,7 @@ struct SettingsNotificationsSection: View {
 #endif
 
     var body: some View {
-        List {
+        Group {
             Section {
                 SettingToggle(
                     Settings.Notifications.terminalNotifications,
@@ -1625,9 +1662,6 @@ struct SettingsNotificationsSection: View {
             }
             #endif
         }
-        .themedList()
-        .navigationTitle("Notifications")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

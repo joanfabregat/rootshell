@@ -3,6 +3,131 @@
 All notable changes to the rootshell app for iPhone, iPad, Vision Pro, and Mac, newest first.
 Versions are listed as `release-build`, matching the version shown in Settings, About.
 
+## 1.0.14-162 - October 5, 2026
+
+### Tailscale Quick Controls
+
+- **Quick Connect:** Start the built-in Tailscale connection from the VPN widget, Control Center toggle, or Connect VPN shortcut once you have signed in on this device.
+- **Sign-In Status:** When Tailscale needs a login, the controls show that status. The widget opens rootshell for sign-in instead of offering a connection that cannot start.
+
+### AWS SSO
+
+- **IAM Identity Center Sign-In:** Sign in to AWS cloud accounts through IAM Identity Center (AWS SSO). Enter your organization's start URL and SSO region, complete browser sign-in, then choose an account and role.
+- **Regions and Credential Refresh:** Choose the SSO region separately from the AWS region you work in. Temporary credentials refresh automatically for cloud sync, Kubernetes, and Bedrock. If your session requires a new login, use Sign In Again in the saved account's details.
+
+### Passwords from Your Password Manager for Remote Programs
+
+- **Remote Credential Requests:** Programs on an SSH or tssh host can ask rootshell for a password or token using `rootshell-askpass`. A sheet shows the host, requesting command, and prompt; fill it with password-manager AutoFill and tap Send to return the value to the requesting program.
+- **Opt-In Per Connection:** Enable Allow Credential Requests under the connection's Advanced -> Credential Requests settings or in its profile editor, then reconnect. It is off by default and is unavailable for Mosh.
+- **Remote Helper:** Install `scripts/rootshell-askpass` on the remote host. Use it with `SUDO_ASKPASS` and `sudo -A`, or call it directly for keyring passwords and CLI tokens. The helper needs `perl`, `socat`, or an `nc` with Unix-socket support; the server must allow Unix-socket forwarding. See the [setup guide and examples](docs/remote-credential-requests.md).
+- **Approval and Privacy:** Each request needs your approval. Values are not stored, logged, or cached. Requests cancel when the helper exits or the connection ends, and unanswered prompts time out after two minutes. The command label comes from the requesting program; cancel unexpected requests.
+
+### Keyboard Fixes
+
+- **VNC Keyboard Focus:** Fixed terminal tabs losing keyboard input after leaving full-screen VNC.
+- **Mac Visor Focus:** Summoning the visor on standalone Mac now gives its terminal keyboard focus even after the main window has been closed, so you can type immediately without clicking it.
+
+## 1.0.13-161 - October 4, 2026
+
+### Tailscale and VPN
+
+- **Built-In Tailscale:** Stay connected to your tailnet while optionally routing selected traffic through SSH or tssh. Capture HTTP(S) traffic from tailnet and non-tailnet destinations without disconnecting from Tailscale. Tailscale and HTTP capture work without an SSH host.
+- **Tailnet Access:** Connect in Settings -> VPN -> Tailscale on iPhone, iPad, or standalone Mac. Reach tailnet IPs, MagicDNS names, and subnet routes from other apps, and view or copy peer hostnames and IPs. Disconnect the separate Tailscale app before connecting here. HTTPS decryption still requires a trusted capture certificate and selected hosts.
+- **Selective SSH Routing:** Optionally choose a saved SSH or tssh egress host, including one on your tailnet. Domain, wildcard, IP, and CIDR rules route matching traffic through SSH or Direct; the first match wins. SSH-matched names resolve on the host. Send Other Traffic Through SSH routes remaining IPv4 traffic through it. Trust the host key in a terminal first; Apply Changes reconnects with edited settings.
+- **Reconnect and Auto Recovery:** VPN now has a top-level Settings section with one-tap reconnect to the last VPN or Tailscale connection. Auto Recovery is on by default: reopening rootshell reconnects a VPN left on before a restart or app update. Manual disconnect clears recovery, another active VPN prevents it, and Local Capture is never automatically restored.
+- **General Settings:** Privacy & Data, notifications, sounds, and updates now live under Settings -> General.
+
+### Open Web Links from Remote Programs
+
+- **Browser Requests:** Remote tools can open HTTP(S) links in this device's browser. Enable Open Links from Programs in Settings -> Terminal -> Program Links; it is off by default.
+- **Remote Helpers:** Install `scripts/rootshell-open` and `scripts/rootshell-open-clipboard` on the remote host. Set `BROWSER` to the full path of `rootshell-open` for SSH/tssh, or `rootshell-open-clipboard` for Mosh 1.4+ and native tmux. Ordinary tmux needs `allow-passthrough on` or `set-clipboard on`, respectively. See the [setup guide](docs/remote-url-opening.md).
+- **Focused-Terminal Requests:** Links open only from the focused terminal in the active window, at most once per second. Background or replayed output cannot open them later, and the clipboard stays untouched. Remote localhost callbacks still need the tool's remote/device authentication flow.
+
+### HTTP Capture and Panels
+
+- **XML and Plist Views:** View XML and binary plists as trees, readable XML, or hex, including bodies with generic content types. JSON and plist trees render lazily. Depth, node, and XML-size limits prevent excessive expansion; oversized plist views fall back to hex.
+- **Server Information:** Request lists show country flags; details add server location and network information, plus hostname, IP, and value copy actions. Look Up Server Locations and Show Network Favicons default to on in Capture Settings -> Server Info. They use your selected location provider and the network's website; private and local addresses are skipped.
+- **Capture Controls:** Fixed capture menu freezes during recording. The certificate sheet now has a Done button.
+- **Full-Size Panels:** Files and HTTP Capture offer Full Size alongside Sidebar and Overlay on larger screens, remembering each panel's presentation. Fixed transparent-background flashes when switching or closing tabs.
+
+### Connections and Preventive Hardening
+
+- **Connection Reuse:** tssh multiplexer discovery reuses its transport, avoiding a second Face ID prompt on connect or roam resume. Attachment uploads reuse live SSH/tssh connections, including native tmux and herdr; a separate connection is the fallback.
+- **Preventive Validation:** Added validation for malformed Mosh messages, invalid tssh IDs, and repeated OAuth callback parameters to prevent potential crashes; none were observed in the wild. OAuth callbacks now listen only on localhost.
+
+## 1.0.13-160 - October 1, 2026
+
+### HTTP and HTTPS Capture
+
+- **Built-In Traffic Inspection:** HTTP capture is included with rootshell. Inspect traffic through the rootshell VPN, including HTTP/1.1, HTTP/2, and WebSocket frames. Use an existing SSH or tssh VPN, or press Record to start Local Capture through your device's internet connection without a remote server. Stopping recording leaves the VPN connected.
+- **Quick Access:** Open HTTP Capture from Settings -> Connections -> VPN, the File menu, the terminal context menu, or Control-Command-H, or add it to the keyboard toolbar. Choose a sidebar or overlay on iPad and standalone Mac; iPhone uses a sheet.
+- **Selective HTTPS Decryption:** Install and trust the capture certificate using the guided setup, then add hosts under Decrypted Hosts. Host rules support wildcards, exclusions, and ports; HTTPS is not decrypted by default. Apps that reject the certificate are automatically skipped on subsequent connections. HTTP/3 is blocked while recording so clients can retry over HTTP/2 or HTTP/1.1.
+- **Request Details and Exports:** Search and filter requests; inspect headers, cookies, bodies, and timing; view JSON trees, HTML, images, forms, source, or hex. Copy requests as cURL, save messages or bodies, and export HAR or ZIP sessions. HAR export can omit cookie and authorization headers. Enable packet recording before starting a session to export pcapng with TLS keys for Wireshark.
+- **Rewrite Rules and Storage Limits:** Add request and response rewrite rules to change headers or replace body text, with wildcard or regular-expression URL matching. Body rewrites apply to bodies up to 1 MB. Set body-storage limits, session-size limits, and how many sessions to retain; recording stops at the session-size limit.
+
+### VPN Controls
+
+- **Local Shell VPN Command:** Added `vpn` to the local shell on iOS and visionOS. `vpn status` shows the active profile, uptime, traffic, and connection counts; `vpn list`, `vpn start <profile>`, and `vpn stop` manage saved VPN profiles.
+- **Mac VPN Status:** Fixed the standalone Mac app losing the active VPN profile or showing stale status when refreshing.
+
+### Files and Uploads
+
+- **Paste Into the File Manager:** Paste copied files, images, and PDFs with Command-V, the overflow menu, or a context menu. Pasting on a folder targets that folder; otherwise it targets the current pane's directory. This uses the normal transfer system for local, remote, and cloud destinations.
+- **Upload Preferences:** Settings -> Connections -> Uploads now controls the default directory, file-path or Markdown-image insertion, and whether pasted or dropped images and PDFs need confirmation. Choose Don't ask again in the upload sheet to save its choices and upload immediately next time. Remembered directories for individual hosts take priority and can be cleared in settings.
+- **SFTP Folder Browsing:** Folder listings make fewer server requests and now release directory handles, preventing repeated browsing from exhausting the server's open-file limit.
+
+### Tabs and Panels
+
+- **Tab Close Confirmation:** Enable Confirm Before Closing Tab in Settings -> Terminal -> Tabs to ask before the tab's close button, Close Tab, or Command-W on its last pane ends the session. It is off by default. The existing pane confirmation also lives here.
+- **Multiplexer Close Preferences:** tmux and herdr control-mode tabs use Multiplexer Close Tab Action instead; choose Ask Each Time to confirm those. Closing herdr's last pane now honors detach and ask preferences.
+- **Resizable Overlays:** Resize the Files, HTTP Capture, Quick Settings, and Open in Folder overlays by dragging a bottom corner. Each remembers its size on that device.
+
+### Stability
+
+- **Locked iPad Fix:** Fixed iPadOS terminating rootshell when session changes updated keyboard suggestions while the iPad was locked. Updates resume when the app becomes active.
+- **iPhone Files and Keyboard Fixes:** Fixed a crash when opening Files from the iPhone connection sheet with the terminal keyboard still active, and a keyboard left covering the sheet after an authentication prompt.
+
+## 1.0.13-159 - October 1, 2026
+
+### Background Sessions and Notifications
+
+- **Background Terminal Processing:** Previously, tssh sessions buffered incoming output when rootshell entered the background and processed it only after you returned. Now, on iOS and iPadOS, SSH and tssh terminals keep processing output during the background time granted by iOS. This includes tmux and herdr control-mode sessions, so terminal notifications can arrive while the app is backgrounded instead of waiting for you to reopen it.
+- **Background Grace Period:** Background tunnels and active local commands also request this grace period. Use Keep TCP SSH Alive in Background in SSH transport settings. Time remains OS-limited.
+- **Saved State:** Window state and scrollback are saved before background processing ends. Rendering stays paused; pending tmux tab and pane changes apply when you return.
+
+### AI Agent
+
+- **ChatGPT Sign-In:** ChatGPT sign-in now uses OpenAI's app registration flow and public API. Existing users must sign in again after updating: Settings -> AI Agent -> OpenAI -> Continue with ChatGPT.
+- **Multiple ChatGPT Accounts:** Save and switch between multiple ChatGPT accounts or workspaces. Each keeps its sign-in; switching refreshes the model list.
+- **Usage Management:** Manage usage links in settings, the model picker, and usage-limit errors open ChatGPT settings to review usage and set a limit for rootshell. Enable plan-use permission for your account or use an API key instead.
+- **Claude Sonnet 5.5:** Updated Claude Sonnet 5 to Sonnet 5.5 on Anthropic and AWS Bedrock, including saved selections. Improved multi-step tool conversations by preserving thinking blocks in order and showing progress updates. The direct Claude API can use a server-selected fallback for declined requests.
+
+### Keyboard, Selection, and Windows
+
+- **iPad Dock and Keyboard:** Fixed the iPad Dock hiding with Terminal Keyboard and a hardware keyboard. Enabling Terminal Keyboard with hardware attached no longer unexpectedly opens the onscreen keyboard.
+- **Keyboard and Pane Crash Fixes:** Fixed crashes when undocking a Magic Keyboard with Terminal Keyboard enabled, or closing a pane with queued mouse or selection events.
+- **Mac Window Positions:** Moved Mac windows now reopen at their last position after quitting. Fixed stale positions being saved when a window move did not trigger a layout update.
+
+### Multiplexers and Agent Detection
+
+- **Optional Detach Banner:** Turn off the tmux, zellij, herdr, and zmx detach confirmation in Settings -> Multiplexers -> Show Detach Banner, or choose Never Show Again in the banner.
+- **herdr Stability and Performance:** Fixed herdr crashes involving zoomed layouts, popup hyperlinks, and malformed Tab Expose geometry. Limited cached layouts and sped up metadata lookups for large sessions.
+- **Coding-Agent Discovery:** Fixed repeated project-directory probes while coding agents run inside plain tmux over SSH. Failed discovery no longer triggers immediate retries, and Linux discovery launches fewer remote processes.
+
+### File Transfers and Attachments
+
+- **Replacement Permissions:** Replacing a file keeps its existing permissions during copying. Preserve Permissions and Dates still applies source attributes when enabled.
+- **Safer Remote Copies:** SFTP copies reject server-supplied names that escape the destination folder. Failed copies prevent a move from deleting its source; `rf` image and editor downloads refuse unexpected folders.
+- **Attachment Size Limits:** Dropped images and PDFs are limited to 250 MB each and 500 MB per drop. Oversized attachments are skipped with an alert; attachments that fit can still proceed.
+- **S3 Share-Link Crash Fix:** Fixed S3 share-link crashes with unusual bucket names.
+
+### Security and Stability
+
+- **SSH Import and Startup Fixes:** Fixed encrypted SSH-key imports freezing on large keys and crashes from malformed tsshd startup output.
+- **Settings and Download Limits:** Added numeric limits for config files and synced settings, preventing crashes from invalid values such as font sizes. Capped SSH login banners and favicon downloads to reduce memory use.
+- **Preview and Folder-Name Safety:** Terminal previews no longer change the clipboard. Prevented control characters in folder names from injecting terminal sequences or extra tmux commands.
+- **VNC Memory Fix:** Fixed memory growth and eventual crashes in long-running VNC Screen Sharing sessions.
+
 ## 1.0.13-158 - September 28, 2026
 
 ### Dictation in More Languages

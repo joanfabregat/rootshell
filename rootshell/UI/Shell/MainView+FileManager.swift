@@ -3,7 +3,7 @@
 //  rootshell
 //
 //  Presents the file manager: a resizable column beside the terminal, a HUD
-//  over it, or a sheet on iPhone. The window's model is created on first use
+//  over it (floating or covering it), or a sheet on iPhone. The window's model is created on first use
 //  and kept while hidden, so reopening restores panes, selection and focus.
 //
 
@@ -14,13 +14,14 @@ extension MainView {
         showFileManager && !isPhone && fileManagerPresentation == .sidebar && fileManagerModel != nil
     }
 
+    /// The floating or full-size HUD.
     var fileManagerShowsOverlay: Bool {
-        showFileManager && !isPhone && fileManagerPresentation == .overlay && fileManagerModel != nil
+        showFileManager && !isPhone && fileManagerPresentation != .sidebar && fileManagerModel != nil
     }
 
     /// The HUD and the iPhone sheet own the keyboard; the sidebar shares the window with the terminal.
     var fileManagerOwnsKeyboard: Bool {
-        showFileManager && (isPhone || fileManagerPresentation == .overlay)
+        showFileManager && (isPhone || fileManagerPresentation.ownsKeyboard)
     }
 
     var fileManagerSidebarCurrentWidth: CGFloat {
@@ -66,7 +67,7 @@ extension MainView {
     }
 
     /// Opens (or retargets) the manager on `endpoint`, reusing a pane already on that file system.
-    func openFileManager(at endpoint: FileEndpoint, presentation: FileManagerPresentation?) {
+    func openFileManager(at endpoint: FileEndpoint, presentation: PanelPresentation?) {
         let model = fileManagerModel ?? makeFileManagerModel()
         fileManagerModel = model
         if let existing = [model.left, model.right].first(where: { $0.endpoint.sharesFileSystem(with: endpoint) }) {
@@ -99,6 +100,9 @@ extension MainView {
         showQuickSettingsOverlay = false
         showOpenInFolderOverlay = false
         showIPLookup = false
+        #if !CHINA_BUILD
+        yieldSlotToFileManager(fileManagerPresentation)
+        #endif
 
         if isPhone {
             resignFirstResponderForSheetPresentation()
@@ -125,8 +129,11 @@ extension MainView {
         }
     }
 
-    func switchFileManagerPresentation(_ presentation: FileManagerPresentation) {
+    func switchFileManagerPresentation(_ presentation: PanelPresentation) {
         guard presentation != fileManagerPresentation else { return }
+        #if !CHINA_BUILD
+        yieldSlotToFileManager(presentation)
+        #endif
         fileManagerPresentation = presentation
         SettingsStore.shared.set(Settings.Transfer.fileManagerPresentation, presentation)
         setOverlayOwnsKeyboardForAllTerminals(isAnySheetPresented || fileManagerOwnsKeyboard)
@@ -134,7 +141,7 @@ extension MainView {
         fileManagerModel?.requestFocus()
     }
 
-    private func scheduleTerminalRelayout() {
+    func scheduleTerminalRelayout() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             NotificationCenter.default.post(name: .terminalLayoutInvalidation, object: nil)
         }
@@ -207,12 +214,15 @@ extension MainView {
         if fileManagerShowsOverlay, let model = fileManagerModel {
             FileManagerHUD(
                 manager: model,
+                fills: fileManagerPresentation == .full,
                 canFocus: showFileManager,
                 theme: resolvedSheetTheme(),
                 onClose: { closeFileManager() },
                 onSwitchPresentation: { switchFileManagerPresentation($0) }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // A fresh host per presentation; the HUD host sets up dragging and resizing once.
+            .id(fileManagerPresentation)
         }
         if !showFileManager {
             TransferPill(onOpen: { openFileManager() })

@@ -842,12 +842,23 @@ extension MainView {
             return false
         }
 
-        let action = TmuxTabCloseAction.current
+        let action = MultiplexerTabCloseAction.current
         if action == .ask {
-            pendingTmuxCloseTabID = tab.id
+            pendingMuxCloseTabID = tab.id
             return true
         }
         return performTmuxClose(action, controller: controller, windowId: windowId)
+    }
+
+    /// herdr counterpart of `handleTmuxWindowTabClose`: route a projected
+    /// tab's close through the configured close action. Returns false when
+    /// control mode isn't live, so the caller closes locally.
+    @MainActor
+    func handleHerdrWindowTabClose(_ tab: TerminalTab) -> Bool {
+        guard tab.isHerdrWindow, let controller = HerdrController.controller(forTab: tab),
+              controller.isActive else { return false }
+        performHerdrClose(MultiplexerTabCloseAction.current, tab: tab, controller: controller)
+        return true
     }
 
     /// Perform a concrete tmux tab-close action (never resolves `.ask`).
@@ -856,7 +867,7 @@ extension MainView {
     /// (id=tmux-tab-close-action)
     @MainActor
     @discardableResult
-    func performTmuxClose(_ action: TmuxTabCloseAction,
+    func performTmuxClose(_ action: MultiplexerTabCloseAction,
                           controller: TmuxController,
                           windowId: Int) -> Bool {
         switch action {
@@ -887,30 +898,16 @@ extension MainView {
         case .ask:
             // Safety net: a re-prompt instead of silently dropping the close.
             if let tab = controller.windowTab(forWindowId: windowId) {
-                pendingTmuxCloseTabID = tab.id
+                pendingMuxCloseTabID = tab.id
             }
             return true
         }
     }
 
-    /// Resolve the tab captured by the "Ask Each Time" action sheet and run the
-    /// chosen action. Re-resolves by id (the tab array may have shifted) and
-    /// no-ops if the tab or its live gateway is gone. (id=tmux-tab-close-action)
+    /// herdr tabs share the close action: close on the server, or detach
+    /// (hide has no herdr meaning and detaches instead).
     @MainActor
-    func runPendingTmuxClose(_ action: TmuxTabCloseAction) {
-        defer { pendingTmuxCloseTabID = nil }
-        guard let id = pendingTmuxCloseTabID,
-              let tab = terminals.first(where: { $0.id == id }),
-              tab.isTmuxWindow, let windowId = tab.tmuxWindowId else { return }
-        guard let controller = TmuxController.controller(forWindowTab: tab),
-              !controller.didEnd, !controller.isDetaching else { return }
-        performTmuxClose(action, controller: controller, windowId: windowId)
-    }
-
-    /// The tmux close-action setting applies to herdr tabs too: close on the
-    /// server, or detach (hide has no herdr meaning and detaches instead).
-    @MainActor
-    func performHerdrClose(_ action: TmuxTabCloseAction, tab: TerminalTab, controller: HerdrController) {
+    func performHerdrClose(_ action: MultiplexerTabCloseAction, tab: TerminalTab, controller: HerdrController) {
         switch action {
         case .closeWindow:
             controller.requestCloseTab(tab)
@@ -919,17 +916,81 @@ extension MainView {
         case .detachSessionAndCloseGateway:
             controller.detach(closeGateway: true)
         case .ask:
-            pendingHerdrCloseTabID = tab.id
+            pendingMuxCloseTabID = tab.id
         }
     }
 
+    /// Resolve the tab captured by the "Ask Each Time" action sheet and run the
+    /// chosen action. Re-resolves by id (the tab array may have shifted) and
+    /// no-ops if the tab or its live gateway is gone. (id=tmux-tab-close-action)
     @MainActor
-    func runPendingHerdrClose(_ action: TmuxTabCloseAction) {
-        defer { pendingHerdrCloseTabID = nil }
-        guard let id = pendingHerdrCloseTabID,
-              let tab = terminals.first(where: { $0.id == id }),
-              let controller = HerdrController.controller(forTab: tab), controller.isActive else { return }
-        performHerdrClose(action, tab: tab, controller: controller)
+    func runPendingMuxClose(_ action: MultiplexerTabCloseAction) {
+        defer { pendingMuxCloseTabID = nil }
+        guard let id = pendingMuxCloseTabID,
+              let tab = terminals.first(where: { $0.id == id }) else { return }
+        if tab.isTmuxWindow, let windowId = tab.tmuxWindowId {
+            guard let controller = TmuxController.controller(forWindowTab: tab),
+                  !controller.didEnd, !controller.isDetaching else { return }
+            performTmuxClose(action, controller: controller, windowId: windowId)
+        } else if tab.isHerdrWindow,
+                  let controller = HerdrController.controller(forTab: tab), controller.isActive {
+            performHerdrClose(action, tab: tab, controller: controller)
+        }
+    }
+
+    /// Tabs whose close goes to a multiplexer server and follows the
+    /// multiplexer close action instead of the tab confirmation.
+    func closesViaMultiplexer(_ tab: TerminalTab) -> Bool {
+        (tab.isTmuxWindow && tab.tmuxWindowId != nil) || tab.isHerdrWindow
+    }
+
+    /// Close a tab from its ✕ or Close Tab menu, asking first when the user
+    /// opted in. Programmatic closes call `closeTab(at:)` directly.
+    func requestUserCloseTab(at index: Int) {
+        guard terminals.indices.contains(index) else { return }
+        let tab = terminals[index]
+        guard PaneCloseConfirmationPolicy.closeTabNeedsConfirm(
+            isEnabled: SettingsStore.shared.value(Settings.Window.confirmBeforeClosingTab),
+            closesViaMultiplexer: closesViaMultiplexer(tab)
+        ) else {
+            closeTab(at: index)
+            return
+        }
+        pendingTabClose = PendingTabClose(tabID: tab.id, lastPaneID: nil)
+    }
+
+    /// Runs the close captured when the confirmation was requested. A ⌘W on
+    /// the last pane closes through `closeSplit` so its window cascade holds.
+    func confirmPendingTabClose() {
+        guard let pending = pendingTabClose else { return }
+        pendingTabClose = nil
+        if let paneID = pending.lastPaneID {
+            guard let pane = terminals.lazy.compactMap({ tab in
+                tab.splitTree.first(where: { $0.uuid == paneID })
+            }).first else { return }
+            closeSplit(targeting: pane)
+        } else if let index = terminals.firstIndex(where: { $0.id == pending.tabID }) {
+            closeTab(at: index)
+            if terminals.isEmpty {
+                // Last tab closed: get out of the way before the
+                // connection sidebar takes over.
+                showingTabSwitcher = false
+            }
+        }
+    }
+
+    /// Holds closing the tab at `index` until the tab that replaces it has
+    /// drawn (see TabsModel.holdClose). True when the caller must stop.
+    func holdCloseForSuccessor(ofTabAt index: Int, close: @escaping @MainActor () -> Void) -> Bool {
+        guard terminals.indices.contains(index) else { return false }
+        let closingID = terminals[index].id
+        // Mirrors closeTab's choice of the tab selected after closing this one.
+        var successorID: UUID?
+        if index == selectedTabIndex, terminals.count > 1 {
+            successorID = tabsModel.groupedCloseNeighbor(for: closingID)
+                ?? terminals[index + 1 < terminals.count ? index + 1 : index - 1].id
+        }
+        return tabsModel.holdClose(of: closingID, untilDrawn: successorID, close: close)
     }
 
     func closeTab(at index: Int) {
@@ -978,14 +1039,7 @@ extension MainView {
         // herdr control mode: a projected tab closes on the server; the
         // `tab.closed` event prunes it here. A gateway tab ends control mode
         // first so its projected tabs are removed while the stream is live.
-        if closingTab.isHerdrWindow, let controller = HerdrController.controller(forTab: closingTab),
-           controller.isActive {
-            let action = TmuxTabCloseAction.current
-            if action == .ask {
-                pendingHerdrCloseTabID = closingTab.id
-            } else {
-                performHerdrClose(action, tab: closingTab, controller: controller)
-            }
+        if handleHerdrWindowTabClose(closingTab) {
             return
         }
         if closingTab.isHerdrGateway,
@@ -998,6 +1052,14 @@ extension MainView {
 
         // Allow closing the last tab (will show empty state or new connection sheet)
         // guard terminals.count > 1 else { return }
+
+        let closingID = closingTab.id
+        if holdCloseForSuccessor(ofTabAt: index, close: {
+            guard let resolved = terminals.firstIndex(where: { $0.id == closingID }) else { return }
+            closeTab(at: resolved)
+        }) {
+            return
+        }
 
         let tabId = terminals[index].id
         #if !CHINA_BUILD

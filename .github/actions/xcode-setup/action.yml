@@ -1,0 +1,115 @@
+name: Xcode setup
+description: >-
+  Restore the Swift package and compilation caches, enable Xcode's
+  compilation cache for every later xcodebuild in the job, and resolve
+  Swift packages. Pair with xcode-cache-save at the end of the job.
+
+inputs:
+  cache:
+    description: Compilation cache name, one per job.
+    required: true
+  fallback-cache:
+    description: Compilation cache to start from when this one has no entry yet.
+    default: ''
+  scheme:
+    description: Scheme to resolve packages for.
+    required: true
+  resolve-args:
+    description: Extra options for package resolution.
+    default: ''
+  always-resolve:
+    description: Resolve even on an exact package cache hit, for a build that resolves again on its own and needs the authenticated retries.
+    default: 'false'
+  metal:
+    description: Download the Metal Toolchain, which the app's shaders need.
+    default: 'true'
+
+outputs:
+  spm-key:
+    description: Swift package cache key.
+    value: ${{ steps.keys.outputs.spm }}
+  spm-hit:
+    description: Whether the Swift package cache matched exactly.
+    value: ${{ steps.spm.outputs.cache-hit }}
+  cas-key:
+    description: Compilation cache key to save under.
+    value: ${{ steps.keys.outputs.cas }}
+
+runs:
+  using: composite
+  steps:
+    # Xcode 26 and later ship the Metal compiler as a separate component,
+    # and the xcode-27 runner image does not include it.
+    - name: Download the Metal Toolchain
+      if: inputs.metal == 'true'
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          xcodebuild -downloadComponent MetalToolchain && exit 0
+          echo "Metal Toolchain download failed (attempt $attempt of 3)" >&2
+          sleep $((attempt * 30))
+        done
+        exit 1
+
+    # The compilation cache is content-addressed, so entries from an older
+    # checkout stay valid, but nothing prunes it between runs. Starting a
+    # new cache each ISO week, and with each Xcode build, bounds its size.
+    # Within a build, Xcode prunes the cache past a limit that defaults to
+    # half the free disk, which varies between runners; a fixed limit
+    # keeps a restored cache from being discarded.
+    - name: Enable compilation caching
+      id: keys
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+        FALLBACK: ${{ inputs.fallback-cache }}
+        RESOLVED: ${{ hashFiles('rootshell.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      run: |
+        cas="$RUNNER_TEMP/CompilationCache.noindex"
+        xcconfig="$RUNNER_TEMP/ci.xcconfig"
+        {
+          echo "COMPILATION_CACHE_ENABLE_CACHING = YES"
+          echo "COMPILATION_CACHE_CAS_PATH = $cas"
+          echo "COMPILATION_CACHE_LIMIT_SIZE = 40G"
+        } > "$xcconfig"
+        echo "XCODE_XCCONFIG_FILE=$xcconfig" >> "$GITHUB_ENV"
+        echo "CAS_PATH=$cas" >> "$GITHUB_ENV"
+        suffix="$(xcodebuild -version | tail -n 1 | awk '{print $NF}')-$(date -u +%G-%V)-"
+        {
+          echo "spm=spm-$RUNNER_OS-$RESOLVED"
+          echo "cas=cas-$CACHE-$suffix$GITHUB_RUN_ID"
+          echo "restore<<EOF"
+          echo "cas-$CACHE-$suffix"
+          if [ -n "$FALLBACK" ]; then echo "cas-$FALLBACK-$suffix"; fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore Swift packages
+      id: spm
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .build/SourcePackages
+        key: ${{ steps.keys.outputs.spm }}
+        restore-keys: spm-${{ runner.os }}-
+
+    - name: Restore compilation results
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ env.CAS_PATH }}
+        key: ${{ steps.keys.outputs.cas }}
+        restore-keys: ${{ steps.keys.outputs.restore }}
+
+    # An exact package cache hit already holds the checkouts that
+    # Package.resolved names; resolving again takes about 85 seconds.
+    - name: Resolve Swift packages
+      if: steps.spm.outputs.cache-hit != 'true' || inputs.always-resolve == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SCHEME: ${{ inputs.scheme }}
+        RESOLVE_ARGS: ${{ inputs.resolve-args }}
+      run: |
+        # RESOLVE_ARGS holds space-separated words.
+        # shellcheck disable=SC2086
+        .github/scripts/resolve-packages.sh "$SCHEME" \
+          -skipPackagePluginValidation -skipMacroValidation $RESOLVE_ARGS

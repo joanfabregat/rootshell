@@ -105,7 +105,7 @@ extension MainView {
             .onChange(of: showSettings) { oldValue, newValue in
                 if newValue {
                     resignFirstResponderForSheetPresentation()
-                } else if oldValue {
+                } else if oldValue, !httpCaptureWaitsForSettingsSheet {
                     restoreFirstResponderAfterSheetDismissal()
                 }
             }
@@ -244,6 +244,9 @@ extension MainView {
     private static let willResignActivePublisher = NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
     private static let didEnterBackgroundPublisher = NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
     private static let didBecomeActivePublisher = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+    #endif
+    #if STANDALONE && targetEnvironment(macCatalyst)
+    private static let visorDidPresentPublisher = NotificationCenter.default.publisher(for: .visorDidPresent)
     #endif
 
     /// herdr controllers post per-window notifications; only the window that
@@ -422,6 +425,9 @@ extension MainView {
             #if STANDALONE
             .onChange(of: ghosttyApp.readiness) { _, readiness in
                 handleVisorGhosttyReadinessChange(readiness)
+            }
+            .onReceive(Self.visorDidPresentPublisher) { _ in
+                reclaimFocusAfterVisorSummon()
             }
             #endif
 #else

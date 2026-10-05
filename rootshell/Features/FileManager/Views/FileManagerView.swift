@@ -14,7 +14,17 @@ struct FileManagerView: View {
     enum Style {
         case sidebar
         case overlay
+        case full
         case sheet
+
+        var presentation: PanelPresentation? {
+            switch self {
+            case .sidebar: .sidebar
+            case .overlay: .overlay
+            case .full: .full
+            case .sheet: nil
+            }
+        }
     }
 
     @Bindable var manager: FileManagerModel
@@ -22,8 +32,8 @@ struct FileManagerView: View {
     /// False while hidden, so no field reclaims the keyboard.
     let canFocus: Bool
     let onClose: () -> Void
-    /// Switches between sidebar and overlay; nil where only one presentation exists.
-    let onSwitchPresentation: ((FileManagerPresentation) -> Void)?
+    /// Switches between presentations; nil where only one presentation exists.
+    let onSwitchPresentation: ((PanelPresentation) -> Void)?
 
     @State private var highlightsShortcutsTip = false
     @Environment(\.sheetThemeColors) private var sheetThemeColors
@@ -115,8 +125,8 @@ struct FileManagerView: View {
             Image(systemName: "folder.badge.gearshape").foregroundStyle(Color.accentColor)
             Text("Files").font(.headline)
             Spacer()
-            if let onSwitchPresentation {
-                FileManagerPresentationMenu(current: style == .sidebar ? .sidebar : .overlay, onSwitch: onSwitchPresentation)
+            if let onSwitchPresentation, let current = style.presentation {
+                PanelPresentationMenu(current: current, onSwitch: onSwitchPresentation)
                     .equatable()
             }
             FileManagerMoreMenu(manager: manager)
@@ -333,32 +343,6 @@ struct FileManagerView: View {
     }
 }
 
-/// Equatable so FileManagerView and MainView renders skip this body and never
-/// rebuild the menu while it is open. `onSwitch` is excluded; it acts on live state.
-private struct FileManagerPresentationMenu: View, Equatable {
-    let current: FileManagerPresentation
-    let onSwitch: (FileManagerPresentation) -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.current == rhs.current
-    }
-
-    var body: some View {
-        Menu {
-            ForEach(FileManagerPresentation.allCases, id: \.self) { presentation in
-                Button {
-                    onSwitch(presentation)
-                } label: {
-                    Label(presentation.title, systemImage: presentation == .sidebar ? "sidebar.right" : "macwindow")
-                }
-            }
-        } label: {
-            Image(systemName: current == .sidebar ? "sidebar.right" : "macwindow")
-        }
-        .accessibilityLabel(String(localized: "Presentation", comment: "File manager presentation menu"))
-    }
-}
-
 /// Equatable owner for the overflow menu, same contract as the presentation
 /// menu. The items read live pane/transfer state in their own child scope.
 private struct FileManagerMoreMenu: View, Equatable {
@@ -378,20 +362,26 @@ private struct FileManagerMoreMenu: View, Equatable {
     }
 }
 
-private struct FileManagerMoreMenuItems: View {
+/// The ⋯ menu, also a pane's background context menu (`side` set: acts on that pane).
+struct FileManagerMoreMenuItems: View {
     let manager: FileManagerModel
+    var side: FilePaneModel.Side? = nil
 
     var body: some View {
-        let pane = manager.activePane
-        Button { manager.sheet = .newFolder } label: {
+        let pane = side.map { manager.pane($0) } ?? manager.activePane
+        Button { activate(); manager.perform(.paste) } label: {
+            Label(FileManagerShortcut.shortcut(for: .paste).title, systemImage: "doc.on.clipboard")
+        }
+        .disabled(pane.path.isEmpty)
+        Button { activate(); manager.sheet = .newFolder } label: {
             Label(FileManagerShortcut.shortcut(for: .newFolder).title, systemImage: "folder.badge.plus")
         }
         .disabled(pane.path.isEmpty)
-        Button { manager.sheet = .goToPath } label: {
+        Button { activate(); manager.sheet = .goToPath } label: {
             Label(FileManagerShortcut.shortcut(for: .goToPath).title, systemImage: "arrow.right.circle")
         }
-        if manager.canOpenActiveInTerminal {
-            Button { manager.perform(.openInTerminal) } label: {
+        if manager.openInTerminal != nil, !pane.path.isEmpty, pane.endpoint.supportsTerminal {
+            Button { activate(); manager.perform(.openInTerminal) } label: {
                 Label(FileManagerShortcut.shortcut(for: .openInTerminal).title, systemImage: "terminal")
             }
         }
@@ -424,5 +414,9 @@ private struct FileManagerMoreMenuItems: View {
         Button { manager.sheet = .shortcuts } label: {
             Label(FileManagerShortcut.shortcut(for: .showShortcuts).title, systemImage: "keyboard")
         }
+    }
+
+    private func activate() {
+        if let side { manager.activeSide = side }
     }
 }
