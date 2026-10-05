@@ -156,6 +156,10 @@ jobs:
           cache: vpn-host
           scheme: rootshellvpn
           resolve-args: -derivedDataPath build/vpn-host/DerivedData
+          # deploy-vpn-host.sh resolves again without credentials, which
+          # api.github.com rejects with 403; resolving first makes that a
+          # no-op.
+          always-resolve: 'true'
           metal: 'false'
 
       - name: Unsigned universal compile check

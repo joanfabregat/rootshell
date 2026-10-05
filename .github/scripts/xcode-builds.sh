@@ -78,6 +78,7 @@ while read -r line; do
         -derivedDataPath "$DERIVED_DATA" \
         -resultBundlePath "$bundle" \
         -quiet \
+        -showBuildTimingSummary \
         CODE_SIGNING_ALLOWED=NO \
         ${test_args[@]+"${test_args[@]}"} \
         "${args[@]}"; then

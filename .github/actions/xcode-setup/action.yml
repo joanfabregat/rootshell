@@ -17,6 +17,9 @@ inputs:
   resolve-args:
     description: Extra options for package resolution.
     default: ''
+  always-resolve:
+    description: Resolve even on an exact package cache hit, for a build that resolves again on its own and needs the authenticated retries.
+    default: 'false'
   metal:
     description: Download the Metal Toolchain, which the app's shaders need.
     default: 'true'
@@ -99,7 +102,7 @@ runs:
     # An exact package cache hit already holds the checkouts that
     # Package.resolved names; resolving again takes about 85 seconds.
     - name: Resolve Swift packages
-      if: steps.spm.outputs.cache-hit != 'true'
+      if: steps.spm.outputs.cache-hit != 'true' || inputs.always-resolve == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
