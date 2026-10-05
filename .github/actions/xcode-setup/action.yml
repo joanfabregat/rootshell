@@ -8,9 +8,18 @@ inputs:
   cache:
     description: Compilation cache name, one per job.
     required: true
+  fallback-cache:
+    description: Compilation cache to start from when this one has no entry yet.
+    default: ''
   scheme:
     description: Scheme to resolve packages for.
     required: true
+  packages-path:
+    description: Where xcodebuild keeps the resolved packages.
+    default: .build/SourcePackages
+  packages-cache:
+    description: Swift package cache name, one per packages-path.
+    default: spm
   resolve-args:
     description: Extra options for package resolution.
     default: ''
@@ -35,11 +44,12 @@ runs:
         exit 1
 
     - name: Cache Swift packages
+      id: spm
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: .build/SourcePackages
-        key: spm-${{ runner.os }}-${{ hashFiles('rootshell.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-        restore-keys: spm-${{ runner.os }}-
+        path: ${{ inputs.packages-path }}
+        key: ${{ inputs.packages-cache }}-${{ runner.os }}-${{ hashFiles('rootshell.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+        restore-keys: ${{ inputs.packages-cache }}-${{ runner.os }}-
 
     # The compilation cache is content-addressed, so entries from an older
     # checkout stay valid, but nothing prunes it. Starting a new cache each
@@ -47,23 +57,36 @@ runs:
     - name: Enable compilation caching
       id: cas
       shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+        FALLBACK: ${{ inputs.fallback-cache }}
       run: |
         cas="$RUNNER_TEMP/CompilationCache.noindex"
         xcconfig="$RUNNER_TEMP/ci.xcconfig"
         printf 'COMPILATION_CACHE_ENABLE_CACHING = YES\nCOMPILATION_CACHE_CAS_PATH = %s\n' "$cas" > "$xcconfig"
         echo "XCODE_XCCONFIG_FILE=$xcconfig" >> "$GITHUB_ENV"
         echo "CAS_PATH=$cas" >> "$GITHUB_ENV"
-        echo "path=$cas" >> "$GITHUB_OUTPUT"
-        echo "prefix=cas-${{ inputs.cache }}-$(xcodebuild -version | tail -n 1 | awk '{print $NF}')-$(date -u +%G-%V)-" >> "$GITHUB_OUTPUT"
+        suffix="$(xcodebuild -version | tail -n 1 | awk '{print $NF}')-$(date -u +%G-%V)-"
+        {
+          echo "path=$cas"
+          echo "prefix=cas-$CACHE-$suffix"
+          echo "restore<<EOF"
+          echo "cas-$CACHE-$suffix"
+          if [ -n "$FALLBACK" ]; then echo "cas-$FALLBACK-$suffix"; fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Cache compilation results
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.cas.outputs.path }}
         key: ${{ steps.cas.outputs.prefix }}${{ github.run_id }}
-        restore-keys: ${{ steps.cas.outputs.prefix }}
+        restore-keys: ${{ steps.cas.outputs.restore }}
 
+    # An exact package cache hit already holds the checkouts that
+    # Package.resolved names; resolving again takes about 85 seconds.
     - name: Resolve Swift packages
+      if: steps.spm.outputs.cache-hit != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}

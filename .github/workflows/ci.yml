@@ -1,7 +1,7 @@
 name: CI
 
 # Fast checks for every pull request. The slower Release, visionOS, Mac
-# Catalyst and VPN host builds are in full-ci.yml.
+# Catalyst, China and VPN host builds are in full-ci.yml.
 
 on:
   pull_request:
@@ -76,15 +76,25 @@ jobs:
           # products under test are compiled too. rootshellTests is the
           # exception: it has no test host, and with "build test" xcodebuild
           # offers no iOS Simulator destination for it.
-          - name: iOS tests and builds
+          #
+          # rootshellTests compiles the app sources itself, so a build of the
+          # app after it reuses little; the two run as separate jobs. The
+          # China variant builds in full-ci.yml.
+          - name: Unit tests (iOS)
             cache: ios-simulator
             platform: ios
             os: '27.0'
             resolve: rootshell-AppStore
             builds: |
               -scheme rootshellTests test
+          - name: App Store (iOS simulator)
+            cache: ios-app
+            fallback-cache: ios-simulator
+            platform: ios
+            os: '27.0'
+            resolve: rootshell-AppStore
+            builds: |
               -scheme rootshell-AppStore build
-              -scheme rootshell-China build
           - name: Helper tests (macOS)
             cache: helper
             platform: macos
@@ -105,6 +115,7 @@ jobs:
       - uses: ./.github/actions/xcode-setup
         with:
           cache: ${{ matrix.cache }}
+          fallback-cache: ${{ matrix.fallback-cache }}
           scheme: ${{ matrix.resolve }}
           resolve-args: -clonedSourcePackagesDirPath ${{ env.PACKAGES_DIR }}
           metal: ${{ matrix.metal || 'true' }}

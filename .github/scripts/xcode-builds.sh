@@ -11,6 +11,7 @@ set -euo pipefail
 
 platform=$1
 common=(-project rootshell.xcodeproj -clonedSourcePackagesDirPath "$PACKAGES_DIR"
+    -disableAutomaticPackageResolution
     -skipPackagePluginValidation -skipMacroValidation)
 
 # Simulators come from xcodebuild's own destination list, so the device is
@@ -67,7 +68,6 @@ while read -r line; do
     if [ -n "$dest" ] && xcodebuild "${common[@]}" \
         -destination "$dest" \
         -derivedDataPath "$DERIVED_DATA" \
-        -disableAutomaticPackageResolution \
         -resultBundlePath "$bundle" \
         -quiet \
         CODE_SIGNING_ALLOWED=NO \
