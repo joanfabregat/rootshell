@@ -56,6 +56,9 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      # A Free account runs 5 macOS jobs at once. Two here plus the VPN host
+      # leave two for ci.yml, so the fast checks never wait for this tier.
+      max-parallel: 2
       matrix:
         include:
           # Shipping configuration: device SDK and Release optimizations,
