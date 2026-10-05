@@ -14,20 +14,24 @@ common=(-project rootshell.xcodeproj -clonedSourcePackagesDirPath "$PACKAGES_DIR
     -disableAutomaticPackageResolution
     -skipPackagePluginValidation -skipMacroValidation)
 
-# Simulators come from xcodebuild's own destination list, so the device is
-# always one the scheme accepts. The generic iOS Simulator destination also
-# builds x86_64, which fails in MainThreadStackSampler.swift (see AGENTS.md).
+# The simulator comes from simctl's device list: asking xcodebuild with
+# -showdestinations loads the whole package graph and took over three
+# minutes. A concrete device also avoids the generic iOS Simulator
+# destination, which builds x86_64 too and fails in
+# MainThreadStackSampler.swift (see AGENTS.md).
 simulator() {
-    xcodebuild -showdestinations "${common[@]}" -scheme "$1" |
-        grep -F "platform:$2 Simulator," | grep -F "name:$3" | grep -v 'Designed for' |
-        grep -F "OS:${OS:-}" | sed -n 's/.* id:\([^,]*\),.*/\1/p' | head -n 1
+    local runtime="com.apple.CoreSimulator.SimRuntime.$1-${OS//./-}"
+    xcrun simctl list devices available --json |
+        jq -r --arg runtime "$runtime" --arg name "$2" \
+            '.devices[$runtime][]? | select(.name | startswith($name)) | .udid' |
+        head -n 1
 }
 
 destination() {
     local udid
     case "$platform" in
-        ios) udid=$(simulator "$1" iOS iPhone) ;;
-        visionos) udid=$(simulator "$1" visionOS "Apple Vision Pro") ;;
+        ios) udid=$(simulator iOS iPhone) ;;
+        visionos) udid=$(simulator xrOS "Apple Vision Pro") ;;
         ios-device) echo "generic/platform=iOS"; return ;;
         visionos-device) echo "generic/platform=visionOS"; return ;;
         catalyst) echo "platform=macOS,arch=arm64,variant=Mac Catalyst"; return ;;
@@ -35,11 +39,15 @@ destination() {
         *) echo "Unknown platform $platform" >&2; return 1 ;;
     esac
     if [ -z "$udid" ]; then
-        echo "xcodebuild lists no $platform simulator with OS ${OS:-} for $1" >&2
-        xcodebuild -showdestinations "${common[@]}" -scheme "$1" >&2 || true
+        echo "simctl lists no $platform simulator with OS ${OS:-}" >&2
+        xcrun simctl list devices available >&2 || true
         return 1
     fi
     echo "id=$udid"
+}
+
+cas_size() {
+    du -sh "${CAS_PATH:-/nonexistent}" 2>/dev/null | sed "s/^/Compilation cache size $1: /" || true
 }
 
 status=0
@@ -48,12 +56,12 @@ while read -r line; do
     [ -n "$line" ] || continue
     n=$((n + 1))
     read -ra args <<< "$line"
-    scheme=$(sed -n 's/.*-scheme \([^ ]*\).*/\1/p' <<< "$line")
     bundle="$RUNNER_TEMP/result-$n.xcresult"
 
+    cas_size "before $line"
     echo "::group::xcodebuild $line"
     test_args=()
-    dest=$(destination "$scheme") || dest=
+    dest=$(destination) || dest=
     if [[ " $line " == *" test "* ]]; then
         # On the runner, letting xcodebuild boot the simulator waits 120 s on
         # instruments' lockdown service, and its diagnostics collection after
@@ -87,5 +95,5 @@ while read -r line; do
     fi
 done <<< "$BUILDS"
 
-du -sh "${CAS_PATH:-/nonexistent}" 2>/dev/null | sed 's/^/Compilation cache size: /' || true
+cas_size after
 exit "$status"

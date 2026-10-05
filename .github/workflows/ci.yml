@@ -82,6 +82,7 @@ jobs:
           # China variant builds in full-ci.yml.
           - name: Unit tests (iOS)
             cache: ios-simulator
+            fallback-cache: ios-app
             platform: ios
             os: '27.0'
             resolve: rootshell-AppStore
@@ -113,6 +114,7 @@ jobs:
         run: xcodebuild -version
 
       - uses: ./.github/actions/xcode-setup
+        id: setup
         with:
           cache: ${{ matrix.cache }}
           fallback-cache: ${{ matrix.fallback-cache }}
@@ -126,6 +128,13 @@ jobs:
           BUILDS: ${{ matrix.builds }}
           PLATFORM: ${{ matrix.platform }}
         run: .github/scripts/xcode-builds.sh "$PLATFORM"
+
+      - uses: ./.github/actions/xcode-cache-save
+        if: ${{ !cancelled() }}
+        with:
+          spm-key: ${{ steps.setup.outputs.spm-key }}
+          spm-hit: ${{ steps.setup.outputs.spm-hit }}
+          cas-key: ${{ steps.setup.outputs.cas-key }}
 
   scripts:
     name: Script tests (Linux)

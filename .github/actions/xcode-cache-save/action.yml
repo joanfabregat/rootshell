@@ -1,0 +1,38 @@
+name: Xcode cache save
+description: >-
+  Save the caches that xcode-setup restored, on the default branch only.
+  Every run saving its own copy outgrows the repository's 10 GB cache
+  quota within two runs and evicts caches still in use, so pull requests
+  only read what the nightly run saved.
+
+inputs:
+  spm-key:
+    description: xcode-setup's spm-key output.
+    required: true
+  spm-hit:
+    description: xcode-setup's spm-hit output.
+    required: true
+  cas-key:
+    description: xcode-setup's cas-key output.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Save Swift packages
+      if: >-
+        inputs.spm-hit != 'true' && github.event_name != 'pull_request' &&
+        github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .build/SourcePackages
+        key: ${{ inputs.spm-key }}
+
+    - name: Save compilation results
+      if: >-
+        github.event_name != 'pull_request' &&
+        github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ env.CAS_PATH }}
+        key: ${{ inputs.cas-key }}

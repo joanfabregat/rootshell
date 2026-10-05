@@ -2,7 +2,7 @@ name: Xcode setup
 description: >-
   Restore the Swift package and compilation caches, enable Xcode's
   compilation cache for every later xcodebuild in the job, and resolve
-  Swift packages.
+  Swift packages. Pair with xcode-cache-save at the end of the job.
 
 inputs:
   cache:
@@ -14,18 +14,23 @@ inputs:
   scheme:
     description: Scheme to resolve packages for.
     required: true
-  packages-path:
-    description: Where xcodebuild keeps the resolved packages.
-    default: .build/SourcePackages
-  packages-cache:
-    description: Swift package cache name, one per packages-path.
-    default: spm
   resolve-args:
     description: Extra options for package resolution.
     default: ''
   metal:
     description: Download the Metal Toolchain, which the app's shaders need.
     default: 'true'
+
+outputs:
+  spm-key:
+    description: Swift package cache key.
+    value: ${{ steps.keys.outputs.spm }}
+  spm-hit:
+    description: Whether the Swift package cache matched exactly.
+    value: ${{ steps.spm.outputs.cache-hit }}
+  cas-key:
+    description: Compilation cache key to save under.
+    value: ${{ steps.keys.outputs.cas }}
 
 runs:
   using: composite
@@ -43,45 +48,53 @@ runs:
         done
         exit 1
 
-    - name: Cache Swift packages
-      id: spm
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ inputs.packages-path }}
-        key: ${{ inputs.packages-cache }}-${{ runner.os }}-${{ hashFiles('rootshell.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-        restore-keys: ${{ inputs.packages-cache }}-${{ runner.os }}-
-
     # The compilation cache is content-addressed, so entries from an older
-    # checkout stay valid, but nothing prunes it. Starting a new cache each
-    # ISO week, and with each Xcode build, bounds its size.
+    # checkout stay valid, but nothing prunes it between runs. Starting a
+    # new cache each ISO week, and with each Xcode build, bounds its size.
+    # Within a build, Xcode prunes the cache past a limit that defaults to
+    # half the free disk, which varies between runners; a fixed limit
+    # keeps a restored cache from being discarded.
     - name: Enable compilation caching
-      id: cas
+      id: keys
       shell: bash
       env:
         CACHE: ${{ inputs.cache }}
         FALLBACK: ${{ inputs.fallback-cache }}
+        RESOLVED: ${{ hashFiles('rootshell.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
       run: |
         cas="$RUNNER_TEMP/CompilationCache.noindex"
         xcconfig="$RUNNER_TEMP/ci.xcconfig"
-        printf 'COMPILATION_CACHE_ENABLE_CACHING = YES\nCOMPILATION_CACHE_CAS_PATH = %s\n' "$cas" > "$xcconfig"
+        {
+          echo "COMPILATION_CACHE_ENABLE_CACHING = YES"
+          echo "COMPILATION_CACHE_CAS_PATH = $cas"
+          echo "COMPILATION_CACHE_LIMIT_SIZE = 40G"
+        } > "$xcconfig"
         echo "XCODE_XCCONFIG_FILE=$xcconfig" >> "$GITHUB_ENV"
         echo "CAS_PATH=$cas" >> "$GITHUB_ENV"
         suffix="$(xcodebuild -version | tail -n 1 | awk '{print $NF}')-$(date -u +%G-%V)-"
         {
-          echo "path=$cas"
-          echo "prefix=cas-$CACHE-$suffix"
+          echo "spm=spm-$RUNNER_OS-$RESOLVED"
+          echo "cas=cas-$CACHE-$suffix$GITHUB_RUN_ID"
           echo "restore<<EOF"
           echo "cas-$CACHE-$suffix"
           if [ -n "$FALLBACK" ]; then echo "cas-$FALLBACK-$suffix"; fi
           echo "EOF"
         } >> "$GITHUB_OUTPUT"
 
-    - name: Cache compilation results
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    - name: Restore Swift packages
+      id: spm
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ${{ steps.cas.outputs.path }}
-        key: ${{ steps.cas.outputs.prefix }}${{ github.run_id }}
-        restore-keys: ${{ steps.cas.outputs.restore }}
+        path: .build/SourcePackages
+        key: ${{ steps.keys.outputs.spm }}
+        restore-keys: spm-${{ runner.os }}-
+
+    - name: Restore compilation results
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ env.CAS_PATH }}
+        key: ${{ steps.keys.outputs.cas }}
+        restore-keys: ${{ steps.keys.outputs.restore }}
 
     # An exact package cache hit already holds the checkouts that
     # Package.resolved names; resolving again takes about 85 seconds.
