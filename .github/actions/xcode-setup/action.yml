@@ -14,10 +14,26 @@ inputs:
   resolve-args:
     description: Extra options for package resolution.
     default: ''
+  metal:
+    description: Download the Metal Toolchain, which the app's shaders need.
+    default: 'true'
 
 runs:
   using: composite
   steps:
+    # Xcode 26 and later ship the Metal compiler as a separate component,
+    # and the xcode-27 runner image does not include it.
+    - name: Download the Metal Toolchain
+      if: inputs.metal == 'true'
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          xcodebuild -downloadComponent MetalToolchain && exit 0
+          echo "Metal Toolchain download failed (attempt $attempt of 3)" >&2
+          sleep $((attempt * 30))
+        done
+        exit 1
+
     - name: Cache Swift packages
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:

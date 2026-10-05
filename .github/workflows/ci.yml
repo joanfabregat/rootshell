@@ -74,6 +74,7 @@ jobs:
             cache: helper
             platform: macos
             resolve: rootshell-helper
+            metal: 'false'
             builds: |
               -scheme rootshell-helper build test
     env:
@@ -91,6 +92,7 @@ jobs:
           cache: ${{ matrix.cache }}
           scheme: ${{ matrix.resolve }}
           resolve-args: -clonedSourcePackagesDirPath ${{ env.PACKAGES_DIR }}
+          metal: ${{ matrix.metal || 'true' }}
 
       - name: xcodebuild
         env:

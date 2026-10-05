@@ -127,6 +127,7 @@ jobs:
           cache: vpn-host
           scheme: rootshellvpn
           resolve-args: -derivedDataPath build/vpn-host/DerivedData
+          metal: 'false'
 
       - name: Unsigned universal compile check
         run: scripts/deploy-vpn-host.sh --build-only
