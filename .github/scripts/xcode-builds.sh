@@ -51,13 +51,27 @@ while read -r line; do
     bundle="$RUNNER_TEMP/result-$n.xcresult"
 
     echo "::group::xcodebuild $line"
-    if dest=$(destination "$scheme") && xcodebuild "${common[@]}" \
+    test_args=()
+    dest=$(destination "$scheme") || dest=
+    if [[ " $line " == *" test "* ]]; then
+        # On the runner, letting xcodebuild boot the simulator waits 120 s on
+        # instruments' lockdown service, and its diagnostics collection after
+        # the tests times out after 600 s even when they pass.
+        test_args=(-collect-test-diagnostics never)
+        if [[ "$dest" == id=* ]]; then
+            xcrun simctl boot "${dest#id=}" 2>/dev/null || true
+            xcrun simctl bootstatus "${dest#id=}" -b ||
+                echo "::warning::Simulator ${dest#id=} did not report booted"
+        fi
+    fi
+    if [ -n "$dest" ] && xcodebuild "${common[@]}" \
         -destination "$dest" \
         -derivedDataPath "$DERIVED_DATA" \
         -disableAutomaticPackageResolution \
         -resultBundlePath "$bundle" \
         -quiet \
         CODE_SIGNING_ALLOWED=NO \
+        ${test_args[@]+"${test_args[@]}"} \
         "${args[@]}"; then
         echo "::endgroup::"
         continue
