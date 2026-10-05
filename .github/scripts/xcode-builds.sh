@@ -46,6 +46,29 @@ destination() {
     echo "id=$udid"
 }
 
+# -quiet hides how many tests ran and how long they took, so a run that
+# silently drops tests would look like a faster one. Print the counts and
+# the slowest tests from the result bundle, add them to the job summary,
+# and fail when no test ran. Assertion messages are read back the same way.
+test_summary() {
+    local summary
+    if ! summary=$(xcrun xcresulttool get test-results summary --path "$2" 2>/dev/null); then
+        echo "::error::No test results for $1"
+        return 1
+    fi
+    jq -r --arg line "$1" '"Tests for \($line): \(.totalTestCount) total, \(.passedTests) passed, \(.failedTests) failed, \(.skippedTests) skipped, \((((.finishTime // 0) - (.startTime // 0)) * 10 | round) / 10) s"' <<< "$summary" |
+        tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+    jq -r '.testFailures[]? | "\(.testIdentifierString // .testName): \(.failureText)"' <<< "$summary"
+    echo "Slowest tests:"
+    xcrun xcresulttool get test-results tests --path "$2" 2>/dev/null |
+        jq -r '[.. | objects | select(.nodeType? == "Test Case" and .durationInSeconds?)] |
+            sort_by(-.durationInSeconds) | .[:10][] | "  \(.durationInSeconds) s  \(.nodeIdentifier // .name)"' || true
+    if [ "$(jq -r '.totalTestCount // 0' <<< "$summary")" -eq 0 ]; then
+        echo "::error::No test ran for $1"
+        return 1
+    fi
+}
+
 cas_size() {
     du -sh "${CAS_PATH:-/nonexistent}" 2>/dev/null | sed "s/^/Compilation cache size $1: /" || true
 }
@@ -73,26 +96,27 @@ while read -r line; do
                 echo "::warning::Simulator ${dest#id=} did not report booted"
         fi
     fi
-    if [ -n "$dest" ] && xcodebuild "${common[@]}" \
-        -destination "$dest" \
-        -derivedDataPath "$DERIVED_DATA" \
-        -resultBundlePath "$bundle" \
-        -quiet \
-        -showBuildTimingSummary \
-        CODE_SIGNING_ALLOWED=NO \
-        ${test_args[@]+"${test_args[@]}"} \
-        "${args[@]}"; then
-        echo "::endgroup::"
-        continue
+    ok=true
+    if [ -n "$dest" ]; then
+        xcodebuild "${common[@]}" \
+            -destination "$dest" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath "$bundle" \
+            -quiet \
+            -showBuildTimingSummary \
+            CODE_SIGNING_ALLOWED=NO \
+            ${test_args[@]+"${test_args[@]}"} \
+            "${args[@]}" || ok=false
+    else
+        ok=false
     fi
     echo "::endgroup::"
-    status=1
-    echo "::error::xcodebuild $line failed"
-    # -quiet drops assertion messages from the log; read them back from the
-    # result bundle.
-    if [[ " $line " == *" test "* ]] && [ -d "$bundle" ]; then
-        xcrun xcresulttool get test-results summary --path "$bundle" |
-            jq -r '.testFailures[]? | "\(.testIdentifierString // .testName): \(.failureText)"'
+    if [[ " $line " == *" test "* ]] && ! test_summary "$line" "$bundle"; then
+        ok=false
+    fi
+    if [ "$ok" = false ]; then
+        status=1
+        echo "::error::xcodebuild $line failed"
     fi
 done <<< "$BUILDS"
 

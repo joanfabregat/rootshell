@@ -4,8 +4,8 @@ description: >-
   branch only. Every run saving its own copy outgrows the repository's
   10 GB cache quota within two runs and evicts caches still in use, so
   pull requests only read what the nightly run saved. A fork can set the
-  repository variable CI_SAVE_CACHES_ON_PR to true to save from its own
-  pull requests too.
+  repository variable CI_SAVE_CACHES_ON_PR to true, passed in as
+  save-on-pr, to save from its own pull requests too.
 
 inputs:
   spm-key:
@@ -14,6 +14,9 @@ inputs:
   spm-hit:
     description: xcode-setup's spm-hit output.
     required: true
+  save-on-pr:
+    description: The repository variable CI_SAVE_CACHES_ON_PR; composite actions cannot read vars themselves.
+    default: ''
   cas-key:
     description: xcode-setup's cas-key output.
     required: true
@@ -26,7 +29,7 @@ runs:
       shell: bash
       env:
         ON_DEFAULT_BRANCH: ${{ github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch }}
-        SAVE_ON_PR: ${{ vars.CI_SAVE_CACHES_ON_PR }}
+        SAVE_ON_PR: ${{ inputs.save-on-pr }}
       run: |
         if [ "$ON_DEFAULT_BRANCH" = true ] || [ "$SAVE_ON_PR" = true ]; then
           echo "save=true" >> "$GITHUB_OUTPUT"

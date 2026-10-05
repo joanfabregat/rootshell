@@ -135,6 +135,7 @@ jobs:
           spm-key: ${{ steps.setup.outputs.spm-key }}
           spm-hit: ${{ steps.setup.outputs.spm-hit }}
           cas-key: ${{ steps.setup.outputs.cas-key }}
+          save-on-pr: ${{ vars.CI_SAVE_CACHES_ON_PR }}
 
   scripts:
     name: Script tests (Linux)
