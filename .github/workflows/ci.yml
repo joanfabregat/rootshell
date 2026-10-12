@@ -104,11 +104,13 @@ jobs:
             builds: |
               -scheme rootshell-helper build test
     env:
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       PACKAGES_DIR: ${{ github.workspace }}/.build/SourcePackages
       DERIVED_DATA: ${{ github.workspace }}/.build/DerivedData
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select Xcode
+        run: .github/scripts/select-xcode.sh
 
       - name: Show Xcode version
         run: xcodebuild -version
