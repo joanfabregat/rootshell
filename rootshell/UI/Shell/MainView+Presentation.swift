@@ -30,12 +30,20 @@ extension MainView {
         )
     }
 
-    /// Whether the pending "Ask Each Time" tab is already hidden — used to omit
-    /// the Hide Tab dialog button (hiding it is a no-op). (id=tmux-tab-close-action)
-    private var pendingTmuxCloseTabIsHidden: Bool {
-        guard let id = pendingTmuxCloseTabID,
-              let tab = terminals.first(where: { $0.id == id }) else { return false }
-        return tab.isHiddenTmuxWindow
+    private var pendingTabCloseExists: Bool {
+        guard let id = pendingTabClose?.tabID else { return false }
+        return terminals.contains { $0.id == id }
+    }
+
+    /// Which multiplexer the pending "Ask Each Time" tab belongs to, and
+    /// whether it offers Hide Tab. (id=tmux-tab-close-action)
+    private var pendingMuxCloseKind: MultiplexerCloseTabDialogModifier.Kind {
+        guard let id = pendingMuxCloseTabID,
+              let tab = terminals.first(where: { $0.id == id }) else { return .tmux(canHide: true) }
+        if tab.isHerdrWindow { return .herdr }
+        // Hiding an already-hidden tab is a no-op, and performTmuxClose(.hideTab)
+        // would fall back to kill-window, turning a non-destructive choice destructive.
+        return .tmux(canHide: !tab.isHiddenTmuxWindow)
     }
 
     private var voiceAgentPresentationDetents: Set<PresentationDetent> {
@@ -67,6 +75,7 @@ extension MainView {
             showKeyboardChooser ||
             showOpenInFolderOverlay ||
             fileManagerOwnsKeyboard ||
+            httpCaptureHoldsKeyboard ||
             // The iPhone presentation is a sheet that owns the keyboard. On
             // regular width the clipboard manager is a passthrough glass HUD (like
             // the Find HUD, which is intentionally absent here) and must NOT count
@@ -149,7 +158,11 @@ extension MainView {
             .modifier(SettingsSheetModifier(
                 showSettings: $showSettings,
                 settingsDestination: settingsDestination,
-                onDismiss: { settingsDestination = nil },
+                onDismiss: {
+                    settingsDestination = nil
+                    flushPendingHTTPCaptureOpen()
+                },
+                openHTTPCapture: settingsOpenHTTPCapture,
                 themeColors: sheetTheme.themeColors,
                 accentColor: sheetTheme.accentColor,
                 colorScheme: sheetTheme.colorScheme
@@ -196,46 +209,36 @@ extension MainView {
             }
             // File manager: iPhone presentation. Larger screens use the sidebar or HUD.
             .modifier(fileManagerPhoneSheetModifier(sheetTheme: sheetTheme))
+            #if !CHINA_BUILD
+            .modifier(httpCapturePhoneSheetModifier(sheetTheme: sheetTheme))
+            #endif
             .sheet(item: $connectionInfoToShow) { info in
                 ConnectionInfoSheet(info: info)
                     .themedSheet(themeColors: sheetTheme.themeColors, accentColor: sheetTheme.accentColor, colorScheme: sheetTheme.colorScheme)
             }
             // Keep the dialog's view builder outside this large modifier chain.
-            .modifier(PaneCloseDialogModifier(
-                pendingPaneID: $pendingClosePaneID,
+            .modifier(CloseConfirmationDialogModifier(
+                title: "Close Pane?",
+                confirmTitle: "Close Pane",
+                message: "Closing this pane will end its current session.",
                 targetExists: pendingClosePaneExists,
+                dismiss: { pendingClosePaneID = nil },
                 confirm: { confirmPendingPaneClose() }
             ))
-            // "Ask Each Time" tmux tab-close action sheet. (id=tmux-tab-close-action)
-            .confirmationDialog(
-                "Close tmux Tab",
-                isPresented: Binding(
-                    get: { pendingTmuxCloseTabID != nil },
-                    set: { if !$0 { pendingTmuxCloseTabID = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("Close tmux Window") { runPendingTmuxClose(.closeWindow) }
-                    .keyboardShortcut(.defaultAction)
-                Button("Detach Session") { runPendingTmuxClose(.detachSession) }
-                Button("Detach Session & Close Gateway") { runPendingTmuxClose(.detachSessionAndCloseGateway) }
-                // Omit Hide Tab for an already-hidden tab: hiding is a no-op there,
-                // and performTmuxClose(.hideTab) would fall back to kill-window —
-                // turning an explicitly non-destructive choice destructive.
-                // (id=tmux-tab-close-action)
-                if !pendingTmuxCloseTabIsHidden {
-                    Button("Hide Tab") { runPendingTmuxClose(.hideTab) }
-                }
-                Button("Cancel", role: .cancel) { pendingTmuxCloseTabID = nil }
-                    .keyboardShortcut(.cancelAction)
-            } message: {
-                Text("Choose what to do with this tmux control-mode tab.")
-            }
+            .modifier(CloseConfirmationDialogModifier(
+                title: "Close Tab?",
+                confirmTitle: "Close Tab",
+                message: "Closing this tab will end its session.",
+                targetExists: pendingTabCloseExists,
+                dismiss: { pendingTabClose = nil },
+                confirm: { confirmPendingTabClose() }
+            ))
             // Kept as a modifier: inlining another dialog here pushes this
-            // chain past the type-checker's budget.
-            .modifier(HerdrCloseTabDialogModifier(
-                pendingTabID: $pendingHerdrCloseTabID,
-                run: { action in runPendingHerdrClose(action) }
+            // chain past the type-checker's budget. (id=tmux-tab-close-action)
+            .modifier(MultiplexerCloseTabDialogModifier(
+                pendingTabID: $pendingMuxCloseTabID,
+                kind: pendingMuxCloseKind,
+                run: { action in runPendingMuxClose(action) }
             ))
             .confirmationDialog(
                 "New Tab",
@@ -330,7 +333,9 @@ extension MainView {
                 themeColors: sheetTheme.themeColors,
                 accentColor: sheetTheme.accentColor,
                 colorScheme: sheetTheme.colorScheme,
-                onSheetDismiss: { flushPendingFileManagerOpen() },
+                // onDismiss runs inside SwiftUI's presentation-state write; resigning
+                // first responder there re-enters SheetBridge and traps.
+                onSheetDismiss: { DispatchQueue.main.async { flushPendingFileManagerOpen() } },
                 phoneContent: { connectionSheetContentForPhone },
                 // Same SidePanelOverlay re-hosting as the tab sidebar above:
                 // inject so @EnvironmentObject reads under this overlay can
@@ -374,6 +379,19 @@ extension MainView {
                     .interactiveDismissDisabled()
                     .themedSheet(themeColors: sheetTheme.themeColors, accentColor: sheetTheme.accentColor, colorScheme: sheetTheme.colorScheme)
                     .id(entry.id)
+                }
+            }
+            .sheet(isPresented: $showAskpassPrompt) {
+                if let request = askpassQueue.first {
+                    RemoteAskpassPromptView(
+                        request: request,
+                        onSubmit: { value in respondToAskpass(id: request.id, value: value) },
+                        onCancel: { respondToAskpass(id: request.id, value: nil) }
+                    )
+                    // Explicit Send/Cancel so the remote helper always gets an answer.
+                    .interactiveDismissDisabled()
+                    .themedSheet(themeColors: sheetTheme.themeColors, accentColor: sheetTheme.accentColor, colorScheme: sheetTheme.colorScheme)
+                    .id(request.id)
                 }
             }
             #if !CHINA_BUILD
@@ -521,59 +539,85 @@ extension MainView {
 
 }
 
-/// "Ask Each Time" close of a herdr control-mode tab: close on the host,
-/// detach, or detach and close the gateway.
-private struct HerdrCloseTabDialogModifier: ViewModifier {
+/// "Ask Each Time" close of a tmux or herdr control-mode tab: close on the
+/// host, detach, detach and close the gateway, or (tmux) hide.
+/// (id=tmux-tab-close-action)
+private struct MultiplexerCloseTabDialogModifier: ViewModifier {
+    enum Kind: Equatable {
+        case tmux(canHide: Bool)
+        case herdr
+    }
+
     @Binding var pendingTabID: UUID?
-    let run: (TmuxTabCloseAction) -> Void
+    let kind: Kind
+    let run: (MultiplexerTabCloseAction) -> Void
 
     func body(content: Content) -> some View {
         content.confirmationDialog(
-            "Close herdr Tab",
+            kind == .herdr ? "Close herdr Tab" : "Close tmux Tab",
             isPresented: Binding(
                 get: { pendingTabID != nil },
                 set: { if !$0 { pendingTabID = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Close herdr Tab") { run(.closeWindow) }
-                .keyboardShortcut(.defaultAction)
-            Button("Detach from herdr") { run(.detachSession) }
-            Button("Detach & Close Gateway") { run(.detachSessionAndCloseGateway) }
+            switch kind {
+            case .tmux(let canHide):
+                Button("Close tmux Window") { run(.closeWindow) }
+                    .keyboardShortcut(.defaultAction)
+                Button("Detach Session") { run(.detachSession) }
+                Button("Detach Session & Close Gateway") { run(.detachSessionAndCloseGateway) }
+                if canHide {
+                    Button("Hide Tab") { run(.hideTab) }
+                }
+            case .herdr:
+                Button("Close herdr Tab") { run(.closeWindow) }
+                    .keyboardShortcut(.defaultAction)
+                Button("Detach from herdr") { run(.detachSession) }
+                Button("Detach & Close Gateway") { run(.detachSessionAndCloseGateway) }
+            }
             Button("Cancel", role: .cancel) { pendingTabID = nil }
                 .keyboardShortcut(.cancelAction)
         } message: {
-            Text("Closing removes the tab from the herdr session on the host. Detaching leaves the session running and returns the gateway tab to its shell.")
+            switch kind {
+            case .tmux:
+                Text("Choose what to do with this tmux control-mode tab.")
+            case .herdr:
+                Text("Closing removes the tab from the herdr session on the host. Detaching leaves the session running and returns the gateway tab to its shell.")
+            }
         }
     }
 }
 
-/// Optional confirmation for a user-requested close in a multi-pane tab.
-private struct PaneCloseDialogModifier: ViewModifier {
-    @Binding var pendingPaneID: UUID?
+/// Optional confirmation for a user-requested pane or tab close.
+private struct CloseConfirmationDialogModifier: ViewModifier {
+    let title: LocalizedStringKey
+    let confirmTitle: LocalizedStringKey
+    let message: LocalizedStringKey
     let targetExists: Bool
+    let dismiss: () -> Void
     let confirm: () -> Void
 
     func body(content: Content) -> some View {
         content.confirmationDialog(
-            "Close Pane?",
+            title,
             isPresented: Binding(
                 get: { targetExists },
-                set: { if !$0 { pendingPaneID = nil } }
+                set: { if !$0 { dismiss() } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Close Pane", role: .destructive, action: confirm)
+            Button(confirmTitle, role: .destructive, action: confirm)
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { pendingPaneID = nil }
+            Button("Cancel", role: .cancel, action: dismiss)
                 .keyboardShortcut(.cancelAction)
         } message: {
-            Text("Closing this pane will end its current session.")
+            Text(message)
         }
         .onChange(of: targetExists) { _, exists in
             // Server reconciliation and tab removal bypass closeSplit.
             // Observe the live tree so those paths dismiss the dialog too.
-            if !exists { pendingPaneID = nil }
+            if !exists { dismiss() }
         }
     }
 }

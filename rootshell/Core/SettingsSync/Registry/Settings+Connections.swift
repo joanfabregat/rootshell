@@ -8,12 +8,12 @@
 import Foundation
 
 extension ProfileSortOrder: SettingValue {}
-extension FileManagerPresentation: SettingValue {}
+extension PanelPresentation: SettingValue {}
 extension KeyAuthRequirement: SettingValue {}
 extension KeyStorageLevel: SettingValue {}
 extension TmuxAutoMode: SettingValue {}
 extension HerdrAutoMode: SettingValue {}
-extension TmuxTabCloseAction: SettingValue {}
+extension MultiplexerTabCloseAction: SettingValue {}
 extension SessionDiscoverySortOrder: SettingValue {}
 extension MoshConfig.PredictionMode: SettingValue {}
 extension TrzszConfig.TransportMode: SettingValue {}
@@ -22,6 +22,7 @@ extension ScreenSharingPanningDefault: SettingValue {}
 extension ScreenSharingPointerModeDefault: SettingValue {}
 extension ScreenSharingCursorRenderingDefault: SettingValue {}
 extension ScreenSharingCursorSizeDefault: SettingValue {}
+extension PasteInsertFormat: SettingValue {}
 
 nonisolated extension Settings {
     enum Connections {
@@ -135,9 +136,12 @@ nonisolated extension Settings {
         static let tmuxDiscoveryAttachMode = SettingKey(
             "tmuxDiscoveryAttachMode", default: TmuxAutoMode.regular, group: .multiplexer, configKey: "tmux-discovery-attach-mode",
             title: String(localized: "tmux Attach Mode", comment: "Setting title"))
-        static let tmuxTabCloseAction = SettingKey(
-            "tmuxTabCloseAction", default: TmuxTabCloseAction.closeWindow, group: .multiplexer, configKey: "tmux-tab-close-action",
-            title: String(localized: "tmux Close Tab Action", comment: "Setting title"))
+        // Persisted name and group predate herdr support; keep them so stored
+        // values, sync records, and group pins carry over.
+        static let tabCloseAction = SettingKey(
+            "tmuxTabCloseAction", default: MultiplexerTabCloseAction.closeWindow, group: .multiplexer,
+            configKey: "multiplexer-tab-close-action",
+            title: String(localized: "Multiplexer Close Tab Action", comment: "Setting title"))
         static let zellijSessionDiscovery = SettingKey(
             "zellijSessionDiscoveryEnabled", default: true, group: .multiplexer, configKey: "zellij-session-discovery-enabled",
             title: String(localized: "Discover zellij Sessions", comment: "Setting title"))
@@ -194,7 +198,7 @@ nonisolated extension Settings {
         static let all: [AnySettingDefinition] = [
             tmuxSessionName.erased, tmuxCustomCommand.erased, tmuxSessionDiscovery.erased,
             tmuxAutoHideGatewayOnAttach.erased, tmuxDiscoveryAttachMode.erased,
-            tmuxTabCloseAction.erased, zellijSessionDiscovery.erased, herdrSessionName.erased,
+            tabCloseAction.erased, zellijSessionDiscovery.erased, herdrSessionName.erased,
             herdrCustomCommand.erased, herdrSessionDiscovery.erased,
             herdrDiscoveryAttachMode.erased, herdrAutoHideGatewayOnAttach.erased, herdrControlHistoryLimitBytes.erased,
             zmxSessionName.erased, zmxCustomCommand.erased, zmxSessionDiscovery.erased, localSessionDiscovery.erased,
@@ -320,12 +324,18 @@ nonisolated extension Settings {
             title: String(localized: "Croc Machine ID", comment: "Setting title"))
 
         static let fileManagerPresentation = SettingKey(
-            "fileManager.presentation", default: FileManagerPresentation.sidebar, group: .transfer,
+            "fileManager.presentation", default: PanelPresentation.sidebar, group: .transfer,
             configKey: "file-manager-presentation",
             title: String(localized: "File Manager Presentation", comment: "Setting title"))
         static let fileManagerSidebarWidth = SettingKey(
             "fileManager.sidebar.width", default: 460.0, group: .transfer, policy: .deviceOnly,
             title: String(localized: "File Manager Sidebar Width", comment: "Setting title"))
+        static let fileManagerHUDWidth = SettingKey(
+            "fileManager.hud.width", default: 1000.0, group: .transfer, policy: .deviceOnly,
+            title: String(localized: "File Manager Overlay Width", comment: "Setting title"))
+        static let fileManagerHUDHeight = SettingKey(
+            "fileManager.hud.height", default: 680.0, group: .transfer, policy: .deviceOnly,
+            title: String(localized: "File Manager Overlay Height", comment: "Setting title"))
         static let fileManagerShowHidden = SettingKey(
             "fileManager.showHidden", default: false, group: .transfer,
             configKey: "file-manager-show-hidden",
@@ -349,12 +359,27 @@ nonisolated extension Settings {
             "fileManager.shortcutsTipShown", default: false, group: .transfer, policy: .deviceOnly,
             title: String(localized: "File Manager Shortcuts Tip Shown", comment: "Setting title"))
 
+        static let attachmentUploadConfirm = SettingKey(
+            "attachmentUpload.confirm", default: true, group: .transfer,
+            configKey: "attachment-upload-confirm",
+            title: String(localized: "Ask Before Uploading", comment: "Setting title"))
+        static let attachmentUploadFormat = SettingKey(
+            "attachmentUpload.format", default: PasteInsertFormat.pathOnly, group: .transfer,
+            configKey: "attachment-upload-format",
+            title: String(localized: "Insert Uploads As", comment: "Setting title"))
+        static let attachmentUploadDirectory = SettingKey(
+            "attachmentUpload.directory", default: "/tmp/rootshell-uploads/", group: .transfer,
+            configKey: "attachment-upload-directory",
+            title: String(localized: "Default Upload Directory", comment: "Setting title"))
+
         static let all: [AnySettingDefinition] = [
             crocMachineID.erased,
             fileManagerPresentation.erased, fileManagerSidebarWidth.erased,
+            fileManagerHUDWidth.erased, fileManagerHUDHeight.erased,
             fileManagerShowHidden.erased, fileManagerConcurrentJobs.erased,
             fileManagerPreserveAttributes.erased, fileManagerIdleDisconnectMinutes.erased,
             fileManagerPaneState.erased, fileManagerShortcutsTipShown.erased,
+            attachmentUploadConfirm.erased, attachmentUploadFormat.erased, attachmentUploadDirectory.erased,
         ]
     }
 }
